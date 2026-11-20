@@ -94,6 +94,14 @@ extern "C" IOMemoryDescriptor *native_gop_handoff_memory(void) {return nullptr;}
 extern "C" void native_gop_handoff_close(task_t) {}
 extern "C" int boot_log_export_put(uint32_t, uint32_t, uint32_t, const void *, uint32_t) {return -1;}
 
+/* NativeAdrenoMemory.cpp declares this weak_import and calls it only to count the
+ * pages of a BO that a user task still maps before it frees them. A statically
+ * linked kernel refuses a dangling weak_import -- the same reason the four stubs
+ * above exist -- and XNU exposes no "which process maps this physical page" query
+ * outside pmap. Answer "nobody": the driver's free_user_mapped counter stays zero
+ * instead of the link failing. */
+extern "C" unsigned int native_pmap_user_mappings(ppnum_t, void **, uint64_t *, char *) {return 0;}
+
 namespace {
 struct Window {
     OSSharedPtr<IOMemoryMap> map;

@@ -168,6 +168,17 @@ def prepare(device=DEVICE, source=None):
             if kit_patch.is_file():
                 git('apply', '--check', kit_patch, cwd=tree / 'kits' / module)
                 git('apply', kit_patch, cwd=tree / 'kits' / module)
+        # The driver pin includes "../AdrenoMetal/OriginalAcceleratorABI.h", because
+        # the module was renamed after this engine revision: UniXNU main now has
+        # drivers/AdrenoMetal, d9460ebb still has drivers/NativeMetal. On iOS the
+        # header is the same file (IOAcceleratorES, 136 bytes), so the old path is
+        # pointed at the module it was renamed from rather than moving the engine
+        # or patching the driver. build-native-adreno-accelerator.py compiles that
+        # translation unit and needs the include to resolve.
+        metal = tree / 'drivers/NativeMetal'
+        legacy = tree / 'drivers/AdrenoMetal'
+        if metal.is_dir() and not legacy.exists():
+            legacy.symlink_to('NativeMetal')
         tree.rename(target)
     return target
 

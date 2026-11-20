@@ -95,6 +95,12 @@ archives = [
   #      HummerGpu.cpp，把固件作为强符号一起归档。
   "fetch-hummer-gpu-firmware.py",
   "build-hummer-adreno-kits.py",
+  # 加速器（AGXAccelerator）：必须排在归档 19 之后 —— 它把去掉 __mod_init_func
+  # 的 late 对象追加进 build/native-adreno/libNativeAdreno.a，并用原始
+  # IOAcceleratorES 的构造函数/元类地址（scripts/data/ioaccelerator-base-abi.json）
+  # 绑掉三个 undefined。HummerGpu.cpp 的 metal() 对这些符号是弱引用，而静态内核
+  # 链接不接受悬空的 weak_import，所以这个对象必须真的进归档，内核才链得上。
+  "build-native-adreno-accelerator.py",
 ]
 
 [kernel.prelink]
