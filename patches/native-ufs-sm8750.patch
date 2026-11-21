@@ -1,5 +1,5 @@
 diff --git a/GccUfs.h b/GccUfs.h
-index 5d11663..05bd3bb 100644
+index 5d11663..b100364 100644
 --- a/GccUfs.h
 +++ b/GccUfs.h
 @@ -13,6 +13,18 @@
@@ -16,7 +16,7 @@ index 5d11663..05bd3bb 100644
 +#define GCC_UFS_PHY_PHY_AUX_ENABLE    0x770bc
 +#define GCC_UFS_PHY_RX_SYMBOL1_ENABLE 0x770d8
 +#define GCC_AGGRE_UFS_PHY_AXI_ENABLE  0x770f0
-+#define UFS_ROOT_PARTITION            "unixnu"
++#define UFS_ROOT_PARTITION            "userdata"
 +#else
  #define GCC_UFS_PHY_AHB_ENABLE        0x77024
  #define GCC_UFS_PHY_TX_SYMBOL0_ENABLE 0x77028

@@ -148,8 +148,11 @@ kernel_args = [
   # panic drain 是同步路径，不依赖 worker，所以先让探针 panic 一次，把
   # usb/ph/er/dr/ds 那几行完整送到串口。
   "hummer-adreno-panic=1",
-  # 根镜像所在分区：编译期由 GccUfs.h 的 UFS_ROOT_PARTITION 决定——SM8750 构建
-  # (-DNATIVE_UFS_SM8750=1) 已经锁成 "unixnu"，所以这里不用、也不能用启动参数覆盖。
+  # 根镜像所在分区：编译期由 GccUfs.h 的 UFS_ROOT_PARTITION 决定，不能启动参数覆盖。
+  # v221 之前这个常量被 13T 的移植带成了 "unixnu"，hummer 的 GPT 里没有该分区，
+  # 于是 v221 的 panic 停在 "no selected root partition"（GPT header/entries 都读对了，
+  # CRC 也过了，只是 128 个条目里没有叫 unixnu 的）。v222 起改回 "userdata"，
+  # 与 board.toml 的 [userdata] 几何、userdata.py 的 `fastboot flash userdata` 一致。
   "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2",
   "offline-apfs-load=1", "startup_debug=0", "-no_corpses",
   "sheng-vsync=60", "sheng-vsync-fixed=1", "offline-mobile-graphics-load=1",
