@@ -152,10 +152,14 @@ skip_setup_tool = "scripts/seed-data-skip-setup.py"
 skip_setup_args = ["--no-auto-dim"]
 kernel_args = [
   "-v", "serial=0", "debug=0x14e", "cpus=6", "kt_fixed_zones=240",
-  # USB CDC 调试控制台（M2）。qcom-usb-debug=1 才会初始化 DWC3 并把 PE_kputc
-  # 接到 USB；主机侧应看到 USB\VID_1209&PID_316D\QCOMXNUUSBDEBUG 的 COM 口。
-  # 没接 USB 时它只是几个失败的寄存器读，不影响启动。
-  "qcom-usb-debug=1",
+  # USB CDC 调试控制台（M2）。qcom-usb-debug=1 会拉起 worker：它等 USB 控制器
+  # 进 ACTIVE，最多 12000 x 5 ms = 60 秒，超时就 panic 把系统带走。
+  # v222 上机实测：系统已经跑到锁屏（SpringBoard 起来了，xpcproxy/cdpd 都在跑），
+  # 但 worker 报 phase=0 (IDLE) 一直不进 ACTIVE，60 秒后 panic
+  # "QCOM USB WORKER unavailable phase=0 error=0"。
+  # 也就是说 USB 调试通道还没通，而它是硬 panic 而不是可降级的告警。
+  # 先关掉，让系统能稳定停在桌面；等 M31 eUSB2 的 prepare 序列补上再打开。
+  # "qcom-usb-debug=1",
   # DEVELOPMENT 构建里 disable_kprintf_output 默认是 true：PE_init_kprintf_config
   # 只在显式传 -enable_kprintf_spam 时才把它关掉。没有这个参数，串口只能拿到
   # init 之前那一段，之后（含 worker 和探针报告）全部静音。
