@@ -6,6 +6,11 @@ name: build-kernel
 
 on:
   workflow_dispatch:
+    inputs:
+      root_image:
+        description: '也生成 unixnu 分区的 root 镜像（约 8 GiB，需要约 16 GiB 空闲磁盘）'
+        type: boolean
+        default: false
   push:
     branches: [ main, master ]
     # 只改文档不该烧一轮 40 分钟的 macOS 构建；代码 / 补丁 / board.toml 仍然自动编。
@@ -181,6 +186,45 @@ jobs:
           for f in ci-logs.tar.gz out/hummer/kernel/kernel.macho out/hummer/payload/payload.img; do
             [ -f "$f" ] && gh release upload ci-latest "$f" --clobber
           done
+
+      # ---------------------------------------------------------------------
+      # 可选：生成 unixnu 分区的 root 镜像（OS 4.9 GiB + SystemOS 3.1 GiB ≈ 8 GiB）。
+      # 只在手动触发且勾选 root_image 时跑 —— 它会把峰值磁盘需求推到 16 GiB
+      # （缓存里那 8 GiB dmg + 生成的 8 GiB 镜像），macOS runner 平时不宽裕，
+      # 所以先删掉已经上传过的构建产物和 Data 种子再开始。
+      # 产物切成 1.9 GiB 分卷发到 ci-latest：release 单文件上限 2 GiB。
+      # 用户侧合并：cat userdata-root.img.part* > userdata-root.img
+      # ---------------------------------------------------------------------
+      - name: Build the root image for the unixnu partition
+        if: ${{ github.event.inputs.root_image == 'true' }}
+        run: |
+          df -h . | tee out/hummer/logs/actions-userdata-disk.log
+          # kernel/payload 已经在上面进了 artifact 和 release，ram-data 只服务 payload 步骤。
+          rm -rf out/hummer/kernel out/hummer/payload out/hummer/ram-data
+          df -h . | tee -a out/hummer/logs/actions-userdata-disk.log
+          ./unixnu build userdata 2>&1 | tee out/hummer/logs/actions-userdata.log
+          df -h . | tee -a out/hummer/logs/actions-userdata-disk.log
+          ls -l out/hummer/userdata/
+
+      - name: Publish the root image in volumes
+        if: ${{ github.event.inputs.root_image == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd out/hummer/userdata
+          # BSD split（macOS）：-b 只认字节数，分卷后缀用 -a。
+          split -b 1992294400 -a 1 userdata-root.img userdata-root.img.part
+          ls -l
+          # 上一轮的旧分卷先删掉，否则 5 卷变 6 卷、用户 cat 出来就是坏的。
+          for asset in $(gh release view ci-latest --json assets \
+                 --jq '.assets[].name' | grep '^userdata-root.img.part'); do
+            gh release delete-asset ci-latest "$asset" -y || true
+          done
+          for f in userdata-root.img.part*; do
+            gh release upload ci-latest "$f" --clobber
+          done
+          gh release upload ci-latest userdata-root.json --clobber
 
       - name: Result
         run: |

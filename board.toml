@@ -30,7 +30,17 @@ fetch = ["AppleLogo", "KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1
 "044-76040-038.dmg" = "3f99b859c9728379110b66657c7b15285bcb1925ad8b5726542e2cdcf8b1028d"
 "044-76034-038.dmg" = "b4908cde41d23e6bc05e6af51a2c9eeb00cf0f863a6a18b1600c96a3fd70414f"
 
+# root 镜像（iPadOS 的 OS + SystemOS，约 7 GB）刷进 GPT 里一个**独立**的分区，
+# 不动安卓的 userdata —— 这是 NATIVE_UFS_SM8750 把 UFS_ROOT_PARTITION 定成
+# "unixnu" 的原因。分区由 scripts/make-hummer-root-partition.py 从 userdata 尾部
+# 切出来（缩小 userdata，新建 unixnu），切完把真实范围填回下面两行。
+#
+# 注意：first_lba/last_lba 必须**就是 unixnu 分区的 GPT 范围**，userdata.py 用
+# 它算容量、拒绝放不下的镜像；而内核侧用的是 GPT 里读到的真实值，不读这里。
+# 现在这两行还是旧 userdata 的范围（220.74 GiB），仅用于让 userdata 步骤的
+# 容量检查放行 —— 切完分区后必须更新，否则 --dry-run 的容量结论是错的。
 [userdata]
+partition = "unixnu"
 first_lba = 0x3a1421
 last_lba = 0x3ad07fa
 lba_bytes = 4096
@@ -149,10 +159,10 @@ kernel_args = [
   # usb/ph/er/dr/ds 那几行完整送到串口。
   "hummer-adreno-panic=1",
   # 根镜像所在分区：编译期由 GccUfs.h 的 UFS_ROOT_PARTITION 决定，不能启动参数覆盖。
-  # v221 之前这个常量被 13T 的移植带成了 "unixnu"，hummer 的 GPT 里没有该分区，
-  # 于是 v221 的 panic 停在 "no selected root partition"（GPT header/entries 都读对了，
-  # CRC 也过了，只是 128 个条目里没有叫 unixnu 的）。v222 起改回 "userdata"，
-  # 与 board.toml 的 [userdata] 几何、userdata.py 的 `fastboot flash userdata` 一致。
+  # v221 的 panic 停在 "no selected root partition" —— 但 stage=GPT entries、
+  # result=kIOReturnSuccess、entries CRC 也过了，说明 GPT header 和分区表都读对了，
+  # 只是 128 个条目里没有名为 unixnu 的分区。也就是说还差"把分区建出来"这一步，
+  # 驱动本身没问题。分区由 scripts/make-hummer-root-partition.py 切出来。
   "native-ufs-root=1", "native-ufs-diagnostics=1", "sheng-pmgr=2",
   "offline-apfs-load=1", "startup_debug=0", "-no_corpses",
   "sheng-vsync=60", "sheng-vsync-fixed=1", "offline-mobile-graphics-load=1",
