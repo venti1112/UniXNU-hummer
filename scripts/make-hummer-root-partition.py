@@ -46,6 +46,7 @@ from pathlib import Path
 
 SECTOR = 4096                     # UFS LUN 0 的逻辑块大小（board.toml: lba_bytes）
 DEVICE = None                     # 由 resolve_device() 从 by-name/userdata 反查后填入
+USE_SU = None                     # 由 require_device() 决定：recovery 里没有 su
 GPT_SIG = b'EFI PART'
 HEADER_SIZE = 92                  # GPT header 的固定部分
 ENTRY_SIZE = 128
@@ -60,21 +61,35 @@ def die(message):
 
 
 def adb_su(command, stdin=None):
-    """在设备上以 root 跑一条命令，返回 stdout 字节。"""
-    return subprocess.run(['adb', 'exec-out', 'su', '-c', command],
-                          input=stdin, capture_output=True, check=True).stdout
+    """在设备上以 root 跑一条命令，返回 stdout 字节。
+
+    recovery 里 adbd 本身就是 root，没有 su 二进制；正常开机则要 su -c。
+    用哪种由 require_device() 探测后写进 USE_SU。
+    """
+    args = ['adb', 'exec-out'] + (['su', '-c', command] if USE_SU else [command])
+    return subprocess.run(args, input=stdin, capture_output=True, check=True).stdout
 
 
 def require_device():
+    global USE_SU
     try:
         out = subprocess.run(['adb', 'devices'], capture_output=True, text=True, check=True).stdout
     except FileNotFoundError:
         die('adb is not installed')
-    if '\tdevice' not in out:
+    if '\tdevice' not in out and '\trecovery' not in out:
         die('no device: connect it and allow USB debugging')
-    who = adb_su('id').decode(errors='replace').strip()
-    if 'uid=0' not in who:
-        die(f'adb exec-out su -c id did not give root: {who!r}')
+    # 先看 adbd 自己是不是 root（recovery 的常态），再退回 su -c（正常系统 + Magisk）。
+    direct = subprocess.run(['adb', 'exec-out', 'id'], capture_output=True, text=True)
+    if 'uid=0' in direct.stdout:
+        USE_SU = False
+        print('adbd is already root (recovery?)')
+        return
+    su = subprocess.run(['adb', 'exec-out', 'su', '-c', 'id'], capture_output=True, text=True)
+    if 'uid=0' in su.stdout:
+        USE_SU = True
+        print('root via su -c')
+        return
+    die(f'no root: adbd says {direct.stdout.strip()!r}, su says {su.stdout.strip()!r}')
 
 
 def resolve_device():
