@@ -144,6 +144,13 @@ def write_sectors(lba, data, dry_run):
     push = subprocess.run(['adb', 'push', str(local), staging], capture_output=True, text=True)
     if push.returncode:
         raise RuntimeError(f'adb push failed: {(push.stderr or push.stdout).strip()}')
+    # push 返回 0 不代表字节真的落地：recovery 的 adbd 在被另一个 adb 会话
+    # 打断时会留下一个空文件，而 dd 只会老老实实报 "0 bytes copied"。
+    landed = subprocess.run(['adb', 'exec-out', f'stat -c%s {staging}'],
+                            capture_output=True, text=True).stdout.strip()
+    if landed != str(len(data)):
+        raise RuntimeError(f'adb push landed {landed or "nothing"} bytes, expected {len(data)} '
+                           f'-- another adb session may have cut it off; stop other adb commands and retry')
     # 不吞 stderr：写失败时要能看到 "dd: /dev/block/sda: Permission denied" 之类。
     # conv=fsync 让 dd 在返回前把数据真正刷到介质 —— 不做这一步，紧接着的回读可能
     # 命中设备缓存里的旧内容，被判成 "read-back mismatch"（第一次尝试就是这么失败的）。
