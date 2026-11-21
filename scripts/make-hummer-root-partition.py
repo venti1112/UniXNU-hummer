@@ -130,40 +130,34 @@ def read_sectors(lba, count):
 
 
 def write_sectors(lba, data, dry_run):
-    """把 data 写到 lba 起始的位置。走 adb push 而不是管道：exec-out 只回传，
-    而 adb shell 的 stdin 会做换行转换，二进制不安全。
+    """把 data 写到 lba 起始的位置，走 adb shell 的 stdin 直接喂设备端 dd。
+
+    不用 adb push：那条路在 recovery 上会返回 0 却只留下一个 0 字节文件，
+    于是 dd 老老实实报 "0 bytes copied"，看起来像写失败但其实一个字节都没送过去。
+    stdin 的二进制安全性已用 md5 验证过（139,264 字节的大文件也不做换行转换）。
 
     失败时抛 RuntimeError（而不是直接退出），调用方要能在只写了一半时回滚。
     """
     if dry_run:
         print(f'    [dry-run] would write {len(data)} bytes at lba {lba}')
         return
-    staging = '/data/local/tmp/unixnu-gpt.bin'
+    if not data:
+        # 空缓冲会让下面的字节数校验变成 0 == 0 而通过，等于假成功。
+        raise RuntimeError('refusing to write an empty buffer')
     local = Path('/tmp/unixnu-gpt.bin')
     local.write_bytes(data)
-    push = subprocess.run(['adb', 'push', str(local), staging], capture_output=True, text=True)
-    if push.returncode:
-        raise RuntimeError(f'adb push failed: {(push.stderr or push.stdout).strip()}')
-    # push 返回 0 不代表字节真的落地：recovery 的 adbd 在被另一个 adb 会话
-    # 打断时会留下一个空文件，而 dd 只会老老实实报 "0 bytes copied"。
-    landed = subprocess.run(['adb', 'exec-out', f'stat -c%s {staging}'],
-                            capture_output=True, text=True).stdout.strip()
-    if landed != str(len(data)):
-        raise RuntimeError(f'adb push landed {landed or "nothing"} bytes, expected {len(data)} '
-                           f'-- another adb session may have cut it off; stop other adb commands and retry')
-    # 不吞 stderr：写失败时要能看到 "dd: /dev/block/sda: Permission denied" 之类。
-    # conv=fsync 让 dd 在返回前把数据真正刷到介质 —— 不做这一步，紧接着的回读可能
-    # 命中设备缓存里的旧内容，被判成 "read-back mismatch"（第一次尝试就是这么失败的）。
-    result = subprocess.run(['adb', 'exec-out',
-                             f'dd if={staging} of={DEVICE} bs={SECTOR} seek={lba} conv=notrunc,fsync'],
-                            capture_output=True, text=True)
+    with local.open('rb') as handle:
+        result = subprocess.run(
+            ['adb', 'shell', f'dd of={DEVICE} bs={SECTOR} seek={lba} conv=notrunc,fsync 2>&1'],
+            stdin=handle, capture_output=True, text=True)
     report = ((result.stdout or '') + (result.stderr or '')).strip()
-    subprocess.run(['adb', 'exec-out', 'sync'], capture_output=True)
-    subprocess.run(['adb', 'exec-out', f'rm -f {staging}'], capture_output=True)
     local.unlink(missing_ok=True)
-    if result.returncode:
-        raise RuntimeError(f'dd failed (exit {result.returncode}): {report}')
-    print(f'    lba {lba}: {report.splitlines()[-1] if report else "ok"}')
+    # dd 自己的统计是唯一可信的证据：退出码为 0 不代表真的搬了数据。
+    copied = re.search(r'(\d+) bytes', report)
+    if not copied or int(copied.group(1)) != len(data):
+        raise RuntimeError(f'dd copied {copied.group(1) if copied else "unknown"} bytes, '
+                           f'expected {len(data)}: {report}')
+    print(f'    lba {lba}: {len(data)} bytes -> {report.splitlines()[-1]}')
 
 
 def crc32(data):
