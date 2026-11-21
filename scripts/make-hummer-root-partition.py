@@ -35,6 +35,7 @@ GPT 里没有这个条目，v221 的 panic 就停在
 前提：设备已连 adb，且 `adb exec-out su -c 'id'` 能拿到 root。
 """
 import argparse
+import re
 import struct
 import subprocess
 import sys
@@ -44,7 +45,7 @@ import zlib
 from pathlib import Path
 
 SECTOR = 4096                     # UFS LUN 0 的逻辑块大小（board.toml: lba_bytes）
-DEVICE = '/dev/block/sda'         # UFS LUN 0
+DEVICE = None                     # 由 resolve_device() 从 by-name/userdata 反查后填入
 GPT_SIG = b'EFI PART'
 HEADER_SIZE = 92                  # GPT header 的固定部分
 ENTRY_SIZE = 128
@@ -74,6 +75,25 @@ def require_device():
     who = adb_su('id').decode(errors='replace').strip()
     if 'uid=0' not in who:
         die(f'adb exec-out su -c id did not give root: {who!r}')
+
+
+def resolve_device():
+    """从 by-name/userdata 反查整盘设备。一加通常是 /dev/block/sda，但不硬编码：
+    UFS 也可能枚举成 mmcblk 或别的名字，写错设备是灾难性的。"""
+    global DEVICE
+    try:
+        link = adb_su('readlink -f /dev/block/by-name/userdata').decode().strip()
+    except subprocess.CalledProcessError:
+        link = ''
+    match = re.fullmatch(r'(/dev/block/(?:sd[a-z]+|mmcblk\d+))p?\d*', link)
+    if not match:
+        die(f'could not derive the whole-disk device from by-name/userdata ({link!r})')
+    DEVICE = match.group(1)
+    # 整盘的 /sys/class/block/<name> 存在、且没有 partition 子文件，才说明拿到的不是某个分区。
+    probe = adb_su(f'cat /sys/class/block/{Path(DEVICE).name}/partition 2>/dev/null; echo end')
+    if b'end' not in probe or probe.strip() != b'end':
+        die(f'{DEVICE} looks like a partition, not the whole disk')
+    print(f'block device {DEVICE}  (resolved from /dev/block/by-name/userdata)')
 
 
 def disk_bytes():
@@ -180,6 +200,7 @@ def main():
     args = parser.parse_args()
 
     require_device()
+    resolve_device()
     total = disk_bytes()
     total_lba = total // SECTOR
     print(f'device  {DEVICE}: {total:,} bytes = {total / 2**30:.2f} GiB = {total_lba:,} LBAs of {SECTOR}')
