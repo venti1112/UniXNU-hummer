@@ -41,13 +41,13 @@ fetch = ["AppleLogo", "KernelCache", "DeviceTree", "StaticTrustCache", "Cryptex1
 # 2026-11-21 实测（recovery 里跑 make-hummer-root-partition.py 读到的真 GPT）：
 #   LUN 0 = /dev/block/sda，508,668,411,904 B = 473.73 GiB = 124,186,624 LBA
 #   [13] super    369,388..3,806,240    (13.11 GiB)
-#   [14] userdata 3,806,241..124,186,618 (459.21 GiB)   ← 这台是 512 GB 机型
-# GPT 只有 32 条 entry，第一个空槽是 [15]。
-# 下面两行**暂时**仍是 userdata 的范围（仅让容量检查放行），切完必须改成
-# unixnu 的真实范围 —— 脚本退出时会直接打印可粘贴的两行。
+#   [14] userdata 3,806,241..107,409,402 (395.21 GiB)  ← 已从 459.21 GiB 切掉 64 GiB
+#   [15] unixnu 107,409,403..124,186,618  (64.00 GiB)  ← root 镜像目标分区
+# 切分由 scripts/make-hummer-root-partition.py --size-gib 64 完成，下面两行就是
+# 它打印出来的 unixnu 真实范围（十六进制），改完不要再手改。
 [userdata]
 partition = "unixnu"
-first_lba = 0x3a1421
+first_lba = 0x666effb
 last_lba = 0x766effa
 lba_bytes = 4096
 windows = [

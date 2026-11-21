@@ -354,6 +354,8 @@ def main():
     new_primary[SECTOR:2 * SECTOR] = build_header(header, entries_crc, 1, total_lba - 1, False)
 
     # 备份 GPT 的 entries 必须与主 GPT 完全一致，只有 header 里的 my_lba/alternate 对调。
+    # 本盘的 entries 表只占 entry_sectors 个扇区（32 x 128 B = 1 个），
+    # 备份里它紧贴 header 前面，即 LBA (alternate - entry_sectors)。
     new_backup = bytearray(backup)
     backup_entries_at = (header['alternate'] - entry_sectors) * SECTOR - (total_lba - 33) * SECTOR
     new_backup[backup_entries_at:backup_entries_at + entry_bytes] = new_blob
@@ -368,6 +370,12 @@ def main():
                                             header['entries_lba'] * SECTOR + entry_bytes]), check)
     if not any(e['used'] and e['name'] == ROOT_NAME for e in written):
         die('internal error: the rebuilt entry array has no unixnu entry')
+    # 备份这一份也要自检：只写 header 不改表的话 CRC 必然对不上，
+    # 主 GPT 一旦损坏就再也回不来了。
+    backup_check = parse_header(bytes(new_backup[header_lba:header_lba + SECTOR]))
+    backup_blob = bytes(new_backup[backup_entries_at:backup_entries_at + entry_bytes])
+    if crc32(backup_blob) != backup_check['entries_crc']:
+        die('internal error: the rebuilt backup entry array does not match its own CRC')
 
     print('\nwriting the primary GPT ...')
     try:
