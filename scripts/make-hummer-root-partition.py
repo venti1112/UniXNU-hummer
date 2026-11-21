@@ -131,17 +131,32 @@ def read_sectors(lba, count):
 
 def write_sectors(lba, data, dry_run):
     """把 data 写到 lba 起始的位置。走 adb push 而不是管道：exec-out 只回传，
-    而 adb shell 的 stdin 会做换行转换，二进制不安全。"""
+    而 adb shell 的 stdin 会做换行转换，二进制不安全。
+
+    失败时抛 RuntimeError（而不是直接退出），调用方要能在只写了一半时回滚。
+    """
     if dry_run:
         print(f'    [dry-run] would write {len(data)} bytes at lba {lba}')
         return
-    staging = Path('/data/local/tmp/unixnu-gpt.bin')
+    staging = '/data/local/tmp/unixnu-gpt.bin'
     local = Path('/tmp/unixnu-gpt.bin')
     local.write_bytes(data)
-    subprocess.run(['adb', 'push', str(local), str(staging)], capture_output=True, check=True)
-    adb_su(f'dd if={staging} of={DEVICE} bs={SECTOR} seek={lba} conv=notrunc 2>/dev/null')
-    adb_su(f'rm -f {staging}')
-    local.unlink()
+    push = subprocess.run(['adb', 'push', str(local), staging], capture_output=True, text=True)
+    if push.returncode:
+        raise RuntimeError(f'adb push failed: {(push.stderr or push.stdout).strip()}')
+    # 不吞 stderr：写失败时要能看到 "dd: /dev/block/sda: Permission denied" 之类。
+    # conv=fsync 让 dd 在返回前把数据真正刷到介质 —— 不做这一步，紧接着的回读可能
+    # 命中设备缓存里的旧内容，被判成 "read-back mismatch"（第一次尝试就是这么失败的）。
+    result = subprocess.run(['adb', 'exec-out',
+                             f'dd if={staging} of={DEVICE} bs={SECTOR} seek={lba} conv=notrunc,fsync'],
+                            capture_output=True, text=True)
+    report = ((result.stdout or '') + (result.stderr or '')).strip()
+    subprocess.run(['adb', 'exec-out', 'sync'], capture_output=True)
+    subprocess.run(['adb', 'exec-out', f'rm -f {staging}'], capture_output=True)
+    local.unlink(missing_ok=True)
+    if result.returncode:
+        raise RuntimeError(f'dd failed (exit {result.returncode}): {report}')
+    print(f'    lba {lba}: {report.splitlines()[-1] if report else "ok"}')
 
 
 def crc32(data):
@@ -232,9 +247,16 @@ def main():
             return
         if not args.yes and input('write the saved GPT back to the device? [y/N] ').lower() != 'y':
             die('aborted')
-        write_sectors(0, primary, dry_run=False)
-        write_sectors(total_lba - len(backup) // SECTOR, backup, dry_run=False)
-        print('restored. reboot into fastboot and check `fastboot getvar partition-size:userdata`')
+        try:
+            write_sectors(0, primary, dry_run=False)
+            write_sectors(total_lba - len(backup) // SECTOR, backup, dry_run=False)
+            check = read_sectors(0, -(-len(primary) // SECTOR))
+            if check != primary:
+                die('restore read back different bytes: the device did not take the write')
+        except Exception as error:                               # noqa: BLE001
+            die(f'restore failed: {error}')
+        print('restored and verified. reboot into fastboot and check '
+              '`fastboot getvar partition-size:userdata`')
         return
 
     # 主 GPT：LBA 0..33（保护性 MBR + header + 32 个 entry 扇区）；备份 GPT 对称地贴在盘尾。
@@ -347,17 +369,29 @@ def main():
         die('internal error: the rebuilt entry array has no unixnu entry')
 
     print('\nwriting the primary GPT ...')
-    write_sectors(0, bytes(new_primary), dry_run=False)
-    print('writing the backup GPT ...')
-    write_sectors(total_lba - 33, bytes(new_backup), dry_run=False)
-
-    # 读回来核对：这一步失败说明写入没落盘，立刻用备份恢复。
-    verify = read_sectors(0, 34)
-    if verify != bytes(new_primary):
-        print('read-back mismatch! restoring the backup GPT ...')
-        write_sectors(0, primary, dry_run=False)
-        write_sectors(total_lba - 33, backup, dry_run=False)
-        die('the write did not read back identically; the original GPT was restored')
+    try:
+        write_sectors(0, bytes(new_primary), dry_run=False)
+        print('writing the backup GPT ...')
+        write_sectors(total_lba - 33, bytes(new_backup), dry_run=False)
+        # 读回来核对：这一步失败说明写入没落盘，立刻用备份恢复。
+        verify = read_sectors(0, 34)
+        if verify != bytes(new_primary):
+            for sector in range(34):
+                got = verify[sector * SECTOR:(sector + 1) * SECTOR]
+                want = bytes(new_primary)[sector * SECTOR:(sector + 1) * SECTOR]
+                if got != want:
+                    print(f'    sector {sector} differs: got {got[:16].hex()} want {want[:16].hex()}')
+            raise RuntimeError('read-back mismatch')
+    except Exception as error:                                   # noqa: BLE001 - 任何失败都要回滚
+        print(f'\n*** 写入失败: {error}')
+        print('*** 正在用刚才的备份恢复原始 GPT ...')
+        try:
+            write_sectors(0, primary, dry_run=False)
+            write_sectors(total_lba - 33, backup, dry_run=False)
+        except Exception as restore_error:                        # noqa: BLE001
+            die(f'回滚也失败了: {restore_error}. 用 --restore {backup_dir} 手工恢复，'
+                f'或者重跑本脚本的 --restore')
+        die('the original GPT was restored')
 
     print(f'\ndone. {ROOT_NAME} = lba {first:,}..{userdata["last"]:,} '
           f'({want * SECTOR / 2**30:.2f} GiB), userdata now ends at {first - 1:,}')
