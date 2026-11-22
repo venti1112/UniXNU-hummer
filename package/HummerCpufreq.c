@@ -56,7 +56,21 @@ extern void *memcpy(void *, const void *, __SIZE_TYPE__);
 #endif
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
-extern bool ml_cpu_idle_time(int cpu_id, uint64_t *idle);
+/*
+ * hummer: the K90 port fed the governor per-CPU idle time through a
+ * machine-layer helper (ml_cpu_idle_time) that the stock xnu-10063 does not
+ * export. XNU keeps no per-CPU idle accounting reachable from here, so report
+ * "no idle" -- the governor then treats every window as fully busy and asks
+ * for the fastest level it is allowed. That matches cpufreq=3's intent (pin
+ * the ceiling) while still going through the same thermal limit.
+ */
+static bool
+hummer_cpu_idle_time(int cpu_id, uint64_t *idle)
+{
+	(void)cpu_id;
+	*idle = 0;
+	return true;
+}
 
 #define SCMI_SHMEM_PHYS         0x17b4e000UL
 #define SCMI_SHMEM_SIZE         0x200U
@@ -673,7 +687,7 @@ governor_thread(void *arg __unused, wait_result_t wr __unused)
 		}
 	}
 	for (unsigned int i = 0; i < topology->num_cpus && i < MAX_CORES; i++) {
-		ml_cpu_idle_time((int)i, &idle_before[i]);
+		hummer_cpu_idle_time((int)i, &idle_before[i]);
 	}
 	for (;;) {
 		uint32_t busy[PERF_DOMAINS] = { 0 };
@@ -691,7 +705,7 @@ governor_thread(void *arg __unused, wait_result_t wr __unused)
 			uint32_t d = (topology->cpus[i].phys_id >> 16) & 0xff;
 			uint64_t idle = 0, idle_span;
 
-			if (d >= PERF_DOMAINS || !ml_cpu_idle_time((int)i, &idle)) {
+			if (d >= PERF_DOMAINS || !hummer_cpu_idle_time((int)i, &idle)) {
 				continue;
 			}
 			idle_span = MIN(idle - idle_before[i], span);
