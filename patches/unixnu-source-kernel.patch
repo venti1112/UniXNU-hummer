@@ -4635,26 +4635,32 @@ index 814ad49..a8856ed 100755
  make -C .cache/xnu-work "${XNU_BUILD_TARGET:-build}" SDKROOT="${XNU_SDKROOT:-iphoneos}" ARCH_CONFIGS=ARM64 \
    MACHINE_CONFIGS=BCM2837 KERNEL_CONFIGS=DEVELOPMENT \
    ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG=arm64 LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY \
-diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
---- a/bsd/vfs/vfs_subr.c
-+++ b/bsd/vfs/vfs_subr.c
-@@ -2688,6 +2688,19 @@
- 		 * possible that when the vnode is examined, its usecount is
- 		 * different than what will be printed in this panic message.
- 		 */
-+		if (vfs_unmountall_started && !vfs_unmountall_finished) {
-+			/* hummer: on the way to power off, a vnode that is
-+			 * already terminated (v_tag 0 / VT_NON, v_type VBAD)
-+			 * gets released once more and takes the machine down
-+			 * with a panic before the shutdown can finish. Put the
-+			 * count back and let the unmount continue; outside the
-+			 * shutdown window the assertion still panics. */
-+			os_atomic_inc(&vp->v_usecount, relaxed);
-+			printf("vnode_rele_ext: vp %p usecount %d during shutdown"
-+			    " (v_tag %d, v_type %d, v_flag %x), ignored\n",
-+			    vp, old_usecount - 1, vp->v_tag, vp->v_type, vp->v_flag);
-+			goto done;
-+		}
- 		panic("vnode_rele_ext: vp %p usecount -ve : %d.  v_tag = %d, v_type = %d, v_flag = %x.",
- 		    vp, old_usecount - 1, vp->v_tag, vp->v_type, vp->v_flag);
- 	}
+diff --git a/patches/xnu/zzzz-hummer-vfs-shutdown.patch b/patches/xnu/zzzz-hummer-vfs-shutdown.patch
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/patches/xnu/zzzz-hummer-vfs-shutdown.patch
+@@ -0,0 +1,23 @@
++diff --git a/bsd/vfs/vfs_subr.c b/bsd/vfs/vfs_subr.c
++--- a/bsd/vfs/vfs_subr.c
+++++ b/bsd/vfs/vfs_subr.c
++@@ -2688,6 +2688,19 @@
++ 		 * possible that when the vnode is examined, its usecount is
++ 		 * different than what will be printed in this panic message.
++ 		 */
+++		if (vfs_unmountall_started && !vfs_unmountall_finished) {
+++			/* hummer: on the way to power off, a vnode that is
+++			 * already terminated (v_tag 0 / VT_NON, v_type VBAD)
+++			 * gets released once more and takes the machine down
+++			 * with a panic before the shutdown can finish. Put the
+++			 * count back and let the unmount continue; outside the
+++			 * shutdown window the assertion still panics. */
+++			os_atomic_inc(&vp->v_usecount, relaxed);
+++			printf("vnode_rele_ext: vp %p usecount %d during shutdown"
+++			    " (v_tag %d, v_type %d, v_flag %x), ignored\n",
+++			    vp, old_usecount - 1, vp->v_tag, vp->v_type, vp->v_flag);
+++			goto done;
+++		}
++ 		panic("vnode_rele_ext: vp %p usecount -ve : %d.  v_tag = %d, v_type = %d, v_flag = %x.",
++ 		    vp, old_usecount - 1, vp->v_tag, vp->v_type, vp->v_flag);
++ 	}
