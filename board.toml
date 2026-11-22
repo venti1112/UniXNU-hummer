@@ -287,15 +287,14 @@ kernel_args = [
   # 注意：hummer_gpu_start() 自己不 panic，失败只报状态并继续开机。
   "hummer-adreno-bringup=1",
   # CPU 调频（package/HummerCpufreq.c，SCMI performance 协议 0x13，
-  # 从 REDMI K90 的 annibale_cpufreq.c 移植）。CPUCP 固件管时钟和电压，
-  # 这里只负责申请性能档：
-  #   2 = 只报告（协议版本、每域当前档位、温度），不动频率
+  # 从 REDMI K90 的 annibale_cpufreq.c 移植）。
+  #   2 = 只报告（协议版本、每域当前档位和档位表、温度读数），不动频率
   #   1 = 跑 governor（按最忙核心挑档 + 触摸 boost + 热限制）
-  # 这一轮先用 2（只读）：把每个域的 enable/dcvs 位、整张 LUT（src/l/cores/
-  # volt）和当前 perf_state 打到 kprintf 里，确认档位表和 XO 频率之后再改成
-  # 3 去锁最高档 —— 直接写错 index 有可能把域推到未定义的档位。
-  # hummer 是三个域：domain0 = cpu@0-200，domain1 = cpu@300-600，
-  # domain2 = cpu@700（不同于 K90 的两个域）。
+  #   3 = 锁在 ceiling（默认 3100 MHz，仍受温度约束）
+  # 地址核对过：本机 Sun（dt-06）的 mmio-sram@0x17b4e000 + cpucp@0x17830000
+  # 与 K90 完全相同，CPU0-5 -> protocol@13 domain 0，CPU6-7 -> domain 1。
+  # （注意别被 vendor_boot 里第一张 DT 误导：那是 Kera，地址是 0x17d09400/0x17400000。）
+  # 这一轮先用 2 只读，确认 SCMI 协议版本和域数之后再改 1 或 3。
   # 入口在 Stage7Probe 的 native_legacy_display_late_probe 里，IOKit 起来之后。
   "cpufreq=2",
   # v120 实测（带 hummer-cpu=1 的延迟诊断屏）：
