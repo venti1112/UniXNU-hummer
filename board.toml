@@ -294,9 +294,10 @@ kernel_args = [
   # 地址核对过：本机 Sun（dt-06）的 mmio-sram@0x17b4e000 + cpucp@0x17830000
   # 与 K90 完全相同，CPU0-5 -> protocol@13 domain 0，CPU6-7 -> domain 1。
   # （注意别被 vendor_boot 里第一张 DT 误导：那是 Kera，地址是 0x17d09400/0x17400000。）
-  # 这一轮先用 2 只读，确认 SCMI 协议版本和域数之后再改 1 或 3。
+  # 3 = 锁在 ceiling（源码里 CEILING_MHZ=3100，仍受温度规则约束）。
+  # 之前一轮用 2 只读，先确认 SCMI 链路能通；现在切到生效模式。
   # 入口在 Stage7Probe 的 native_legacy_display_late_probe 里，IOKit 起来之后。
-  "cpufreq=2",
+  "cpufreq=3",
   # v120 实测（带 hummer-cpu=1 的延迟诊断屏）：
   #   HUMTOUCH cpu processor_count=6 avail=6 max=5 cpus_arg=6
   # 六核全部注册，SMP 通了，所以这里不再带诊断参数。需要再量一次就把
