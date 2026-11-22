@@ -168,6 +168,14 @@ kernel_args = [
   # panic drain 是同步路径，不依赖 worker，所以先让探针 panic 一次，把
   # usb/ph/er/dr/ds 那几行完整送到串口。
   "hummer-adreno-panic=1",
+  # GPU：package/HummerGpu.cpp 的 hummer_gpu_start() 是 opt-in 的 ——
+  # PE_parse_boot_argn("hummer-adreno-bringup") 不解到 1 就直接 return
+  # kIOReturnUnsupported，所以在这之前 GPU 从未启动过，SpringBoard 只能靠 CPU
+  # 合成（1264x2780 每帧 350 万像素，实测 2 秒一帧）。
+  # 打开后依次走：GPUCC 上电 → SMMU 路由 → GMU cold start + HFI → CP → ZAP →
+  # ring → publish user client → 注册 Metal 服务（13T 在该路径上已验证
+  # submissions/completions 1039/1039、presentation 518/0）。
+  "hummer-adreno-bringup=1",
   # 根镜像所在分区：编译期由 GccUfs.h 的 UFS_ROOT_PARTITION 决定，不能启动参数覆盖。
   # v221 的 panic 停在 "no selected root partition" —— 但 stage=GPT entries、
   # result=kIOReturnSuccess、entries CRC 也过了，说明 GPT header 和分区表都读对了，
