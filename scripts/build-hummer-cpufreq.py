@@ -65,11 +65,12 @@ if command and command[0] in ('clang', 'clang++'):
     command = ['xcrun', '--sdk', 'iphoneos', command[0]] + command[1:]
 # The governor includes <kern/...> (osfmk), <sys/...> (bsd) and the board's own
 # header directory. No -Werror: engine headers are compiled as-is.
-# Only osfmk needs to be appended: the compile record already carries
-# EXPORT_HDRS/bsd, and adding the real bsd/ as well makes <libkern/libkern.h>
-# resolve twice with conflicting copyinstr prototypes.
-command += ['-I', str(ROOT / '.cache/xnu-work/osfmk'),
-            '-I', str(ROOT / 'kits/hummer'),
+# No extra XNU include roots: startup.o.json already carries the EXPORT_HDRS
+# set that the kernel itself compiles against. Adding the raw osfmk/ or bsd/
+# trees on top makes <kern/clock.h> and <libkern/libkern.h> resolve to the
+# un-exported copies and clash on clock_t / copyinstr. Only the board's own
+# header directory is appended.
+command += ['-I', str(ROOT / 'kits/hummer'),
             '-Wno-unused-parameter', '-Wno-unknown-warning-option']
 (OUT / 'compile-command.json').write_text(json.dumps(command, indent=2) + '\n')
 run(command, directory)
