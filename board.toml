@@ -291,10 +291,13 @@ kernel_args = [
   # 这里只负责申请性能档：
   #   2 = 只报告（协议版本、每域当前档位、温度），不动频率
   #   1 = 跑 governor（按最忙核心挑档 + 触摸 boost + 热限制）
-  #   3 = 锁在 ceiling（默认 3100 MHz，仍受温度规则约束）—— 先用这个验证通路
-  # ABL 交接时 cluster 1（两颗 Oryon prime）停在最慢的 1017.6 MHz，不调就一直那么慢。
+  # 这一轮先用 2（只读）：把每个域的 enable/dcvs 位、整张 LUT（src/l/cores/
+  # volt）和当前 perf_state 打到 kprintf 里，确认档位表和 XO 频率之后再改成
+  # 3 去锁最高档 —— 直接写错 index 有可能把域推到未定义的档位。
+  # hummer 是三个域：domain0 = cpu@0-200，domain1 = cpu@300-600，
+  # domain2 = cpu@700（不同于 K90 的两个域）。
   # 入口在 Stage7Probe 的 native_legacy_display_late_probe 里，IOKit 起来之后。
-  "cpufreq=3",
+  "cpufreq=2",
   # v120 实测（带 hummer-cpu=1 的延迟诊断屏）：
   #   HUMTOUCH cpu processor_count=6 avail=6 max=5 cpus_arg=6
   # 六核全部注册，SMP 通了，所以这里不再带诊断参数。需要再量一次就把
