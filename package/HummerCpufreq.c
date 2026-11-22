@@ -851,7 +851,7 @@ perfctl_wi_notify(__unused perfcontrol_state_t state, perfcontrol_work_interval_
 /* Interrupts may be disabled and scheduler locks held here; atomic counters only. */
 static void
 perfctl_state_update(perfcontrol_event event, __unused uint32_t cpu_id, __unused uint64_t timestamp,
-    __unused uint32_t flags, struct perfcontrol_thread_data *thr_data, __unused uint64_t *timeout_ticks)
+    __unused uint32_t flags, struct perfcontrol_thread_data *thr_data, __unused void *timeout_ticks)
 {
 	if (event == QUANTUM_EXPIRY && thr_data != NULL &&
 	    thr_data->perfctl_class >= PERFCONTROL_CLASS_USER_INITIATED) {
