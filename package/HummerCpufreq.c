@@ -46,8 +46,13 @@
  */
 extern int printf(const char *, ...);
 extern int snprintf(char *, __SIZE_TYPE__, const char *, ...);
+extern int vsnprintf(char *, __SIZE_TYPE__, const char *, __builtin_va_list);
+extern void *memcpy(void *, const void *, __SIZE_TYPE__);
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
