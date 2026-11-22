@@ -31,14 +31,24 @@
 #include <kern/clock.h>
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
-#include <libkern/libkern.h>
 #include <mach/mach_types.h>
 #include <machine/machine_routines.h>
 #include <os/atomic_private.h>
 #include <pexpert/pexpert.h>
-/* hummer: no annibale input header; touch boost is wired separately. */
-#include <sys/systm.h>
 #include <sys/work_interval.h>
+
+/*
+ * hummer: <libkern/libkern.h> and <sys/systm.h> resolve to the EXPORT_HDRS
+ * copies in this build, and those carry the userspace clock_t / copyinstr
+ * definitions that clash with kern_types.h and misc_protos.h pulled in by
+ * <kern/clock.h>. Declare the handful of symbols this file needs instead of
+ * dragging the exported BSD headers into a kernel-side compile.
+ */
+extern int printf(const char *, ...);
+extern int snprintf(char *, __SIZE_TYPE__, const char *, ...);
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
 extern vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 extern bool ml_cpu_idle_time(int cpu_id, uint64_t *idle);
