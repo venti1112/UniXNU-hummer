@@ -82,6 +82,13 @@ archives = [
   # hummer 触屏（S3910 @ GENI SPI4）；触发点在 scripts/pmgr/ShengPlatformPower.cpp
   # 的 sheng_pmgr_run() 末尾（弱引用）。默认不跑（hummer-touch=0）。
   "build-hummer-touch.py",
+  # CPU 调频（SCMI performance 协议 0x13，从 REDMI K90 的 annibale_cpufreq.c 移植）。
+  # CPUCP 固件管时钟电压，这里只申请性能档：domain 0 = cluster 0 六核，
+  # domain 1 = cluster 1 两核。ABL 交接时 domain 1 停在最慢的 1017.6 MHz。
+  # 归档 build/hummer-cpufreq/libHummerCpufreq.a 由 defconfig 的
+  # XNU_EXTRA_LD_ARCHIVES force-load；入口 hummer_cpufreq_init() 在
+  # Stage7Probe 的 native_legacy_display_late_probe() 里调用。
+  "build-hummer-cpufreq.py",
   # USB CDC 调试控制台（nabu 的 QcomXnuUsbDebug 移植，profile soc/Sm8750.h）。
   # 这一轮只编不链：先证明模块能对 xnu-10063 编过，下一轮再补 XNU 控制台钩子
   # （patches/xnu/）并把 libHummerUsbCdc.a force-load 进内核。
@@ -168,14 +175,9 @@ kernel_args = [
   # panic drain 是同步路径，不依赖 worker，所以先让探针 panic 一次，把
   # usb/ph/er/dr/ds 那几行完整送到串口。
   "hummer-adreno-panic=1",
-  # GPU：package/HummerGpu.cpp 的 hummer_gpu_start() 是 opt-in 的 ——
-  # PE_parse_boot_argn("hummer-adreno-bringup") 不解到 1 就直接 return
-  # kIOReturnUnsupported，所以在这之前 GPU 从未启动过，SpringBoard 只能靠 CPU
-  # 合成（1264x2780 每帧 350 万像素，实测 2 秒一帧）。
-  # 打开后依次走：GPUCC 上电 → SMMU 路由 → GMU cold start + HFI → CP → ZAP →
-  # ring → publish user client → 注册 Metal 服务（13T 在该路径上已验证
-  # submissions/completions 1039/1039、presentation 518/0）。
-  "hummer-adreno-bringup=1",
+  # （GPU 的开关不在这里 —— v185 起 "hummer-adreno-bringup=1" 就已经在下面的
+  #   v185 全链那一段里了。0.5 -> 1.5 帧那次的提升来自关掉 qcom-usb-debug，
+  #   不是 GPU：驱动链一直有跑，但 SpringBoard 的合成仍然在 CPU 上。）
   # 根镜像所在分区：编译期由 GccUfs.h 的 UFS_ROOT_PARTITION 决定，不能启动参数覆盖。
   # v221 的 panic 停在 "no selected root partition" —— 但 stage=GPT entries、
   # result=kIOReturnSuccess、entries CRC 也过了，说明 GPT header 和分区表都读对了，
@@ -284,6 +286,15 @@ kernel_args = [
   # 加载 Metal 加速器。每一步在屏上留名字，卡住能看出卡在哪。
   # 注意：hummer_gpu_start() 自己不 panic，失败只报状态并继续开机。
   "hummer-adreno-bringup=1",
+  # CPU 调频（package/HummerCpufreq.c，SCMI performance 协议 0x13，
+  # 从 REDMI K90 的 annibale_cpufreq.c 移植）。CPUCP 固件管时钟和电压，
+  # 这里只负责申请性能档：
+  #   2 = 只报告（协议版本、每域当前档位、温度），不动频率
+  #   1 = 跑 governor（按最忙核心挑档 + 触摸 boost + 热限制）
+  #   3 = 锁在 ceiling（默认 3100 MHz，仍受温度规则约束）—— 先用这个验证通路
+  # ABL 交接时 cluster 1（两颗 Oryon prime）停在最慢的 1017.6 MHz，不调就一直那么慢。
+  # 入口在 Stage7Probe 的 native_legacy_display_late_probe 里，IOKit 起来之后。
+  "cpufreq=3",
   # v120 实测（带 hummer-cpu=1 的延迟诊断屏）：
   #   HUMTOUCH cpu processor_count=6 avail=6 max=5 cpus_arg=6
   # 六核全部注册，SMP 通了，所以这里不再带诊断参数。需要再量一次就把

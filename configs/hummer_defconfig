@@ -51,4 +51,6 @@ CONFIG_XNU_EARLY_BOOT_PROGRESS=y
 
 # hummer 触屏（S3910 + drivers/NativeGeniSpi/GeniSpi.c），由
 # build-hummer-touch.py 归档；默认关闭，NativeHidInput 信箱是弱引用。
-CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/hummer-touch/libHummerTouch.a"
+# hummer CPU 调频（package/HummerCpufreq.c，SCMI performance 协议），
+# 由 build-hummer-cpufreq.py 归档；boot arg cpufreq=1/2/3 才让它工作。
+CONFIG_XNU_EXTRA_LD_ARCHIVES="-Wl,-force_load,{tree}/build/hummer-touch/libHummerTouch.a -Wl,-force_load,{tree}/build/hummer-cpufreq/libHummerCpufreq.a"

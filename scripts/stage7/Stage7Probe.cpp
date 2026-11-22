@@ -115,6 +115,13 @@ static void startKeyState(void) {
 // PE_parse_boot_argn and nothing else.
 extern "C" int hummer_gpu_start(void);
 
+// Defined in the cpufreq archive (package/HummerCpufreq.c, ported from the
+// REDMI K90 port). It reads `cpufreq` itself and returns immediately when the
+// argument is absent or out of range, so calling it unconditionally costs one
+// PE_parse_boot_argn. mode 1 runs the governor, 2 only reports, 3 pins the
+// ceiling -- none of them touch anything before that check.
+extern "C" void hummer_cpufreq_init(void);
+
 extern "C" void native_legacy_display_probe(void) {
     if(displayInitialized)return;
     displayInitialized=true;
@@ -136,6 +143,11 @@ extern "C" void native_legacy_display_late_probe(void) {
     // existing post-IOKit entry point, so the GPU work hangs here instead of
     // costing another XNU patch.
     progress("GPU start",(uint32_t)hummer_gpu_start());
+    // CPU frequency: SCMI performance protocol. Runs after IOKit is live for the
+    // same reason the GPU does (it starts a kernel thread and maps windows), and
+    // it must run before the userland load below or the desktop boots at the
+    // level the boot loader left behind (cluster 1 at 1017.6 MHz).
+    hummer_cpufreq_init();
     // The offline HID source loads IOHIDFamily/IOHIDEventDriver itself whenever
     // offline-hid-input=1 is set, and only creates the device when that first load
     // succeeded - so it must run before anything else touches IOHID. Without that
