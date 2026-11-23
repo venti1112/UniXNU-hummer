@@ -118,6 +118,10 @@ def main():
     prepare_translator(tree)
     prepare_venv(tree)
 
+    # The plugin's Turnip prefix replay is recorded on the host simulation
+    # (gen-turnip-replay.py -> check-turnip-darwin-host.py -> build/mesa-tu),
+    # so the host build has to exist before build-adreno-metal-plugin.py runs.
+    run([sys.executable, 'scripts/build-turnip-darwin.py', '--target', 'host'], cwd=tree)
     run([sys.executable, 'scripts/build-turnip-darwin.py', '--target', 'ios'], cwd=tree)
     run([sys.executable, 'scripts/build-adreno-metal-plugin.py'], cwd=tree)
 
