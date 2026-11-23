@@ -143,6 +143,7 @@ jobs:
         id: gpu
         continue-on-error: true
         run: |
+          set -o pipefail
           mkdir -p out/hummer/logs
           python3 scripts/build-hummer-metal.py \
             --tree out/hummer/tree \
@@ -155,21 +156,25 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           UNIXNU_UNIQUE_CHIP_ID: ${{ secrets.UNIXNU_UNIQUE_CHIP_ID }}
         run: |
+          set -o pipefail
           if [ -z "$UNIXNU_UNIQUE_CHIP_ID" ]; then
             export UNIXNU_UNIQUE_CHIP_ID="$(python3 -c 'import secrets; print(secrets.token_hex(8))')"
           fi
-          TRUST=out/hummer/original-static-system.bundle
+          # The owner trust bundle already contains both original modules; the
+          # payload builder only skips the board's trust_cache_sha256 allowlist
+          # when it is passed through --owner-trust-cache, not --trust-cache.
+          TRUST_ARGS=(--trust-cache out/hummer/original-static-system.bundle)
           DATA=out/hummer/ram-data/data.dbrdisk
           if [ -f out/hummer/gpu/data-gpu.dbrdisk ] && [ -f out/hummer/gpu/owner-trust.bundle ]; then
-            TRUST=out/hummer/gpu/owner-trust.bundle
+            TRUST_ARGS=(--owner-trust-cache out/hummer/gpu/owner-trust.bundle)
             DATA=out/hummer/gpu/data-gpu.dbrdisk
-            echo "GPU userspace staged: data=$DATA trust=$TRUST"
+            echo "GPU userspace staged: data=$DATA trust=${TRUST_ARGS[1]}"
           else
             echo "GPU userspace absent: falling back to the CPU Data seed"
           fi
           # --skip-setup：payload 步骤读 board.toml [payload] skip_setup_tool，在 Data 种子
           # 的副本上把 Setup 标记为完成，系统起来直接进 SpringBoard 而不是 Hello。
-          ./unixnu build kernel payload -j 3 --trust-cache "$TRUST" --data-ramdisk "$DATA" --skip-setup 2>&1 | tee out/hummer/logs/actions-build.log
+          ./unixnu build kernel payload -j 3 "${TRUST_ARGS[@]}" --data-ramdisk "$DATA" --skip-setup 2>&1 | tee out/hummer/logs/actions-build.log
 
       - name: Show build log tail
         if: always()
@@ -185,8 +190,15 @@ jobs:
         id: check
         run: |
           K=out/hummer/kernel/kernel.macho
+          P=out/hummer/payload/payload.img
           if [ -f "$K" ]; then echo "KERNEL_BUILT=yes" >> "$GITHUB_ENV"; ls -la "$K"; else echo "KERNEL_BUILT=no" >> "$GITHUB_ENV"; fi
-          [ -f out/hummer/payload/payload.img ] && ls -la out/hummer/payload/payload.img || echo "payload.img not produced"
+          if [ -f "$P" ]; then
+            echo "PAYLOAD_BUILT=yes" >> "$GITHUB_ENV"; ls -la "$P"
+          else
+            echo "PAYLOAD_BUILT=no" >> "$GITHUB_ENV"
+            echo "payload.img not produced"
+            exit 1
+          fi
 
       - name: Upload
         if: always()
@@ -264,4 +276,8 @@ jobs:
 
       - name: Result
         run: |
-          if [ "$KERNEL_BUILT" = "yes" ]; then echo "kernel + payload built"; else echo "kernel did not build"; exit 1; fi
+          if [ "$KERNEL_BUILT" = "yes" ] && [ "$PAYLOAD_BUILT" = "yes" ]; then
+            echo "kernel + payload built"
+          else
+            echo "kernel=$KERNEL_BUILT payload=$PAYLOAD_BUILT"; exit 1
+          fi
