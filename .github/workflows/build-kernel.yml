@@ -25,7 +25,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    # macOS arm64 托管 runner 连续两次 15 分钟拿不到机器（注解：
+    # "The job was not acquired by Runner of type hosted ..."）。构建本身只做
+    # arm64 交叉编译，宿主架构无要求，因此改用 Intel 池避开 arm64 容量。
+    runs-on: macos-15-intel
     timeout-minutes: 360
     # 必须显式给写权限：没有它 GITHUB_TOKEN 是只读的，gh release upload 会 403。
     # 而那一步带 continue-on-error，失败会被吞掉 —— 于是日志永远发不出来，
