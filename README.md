@@ -146,7 +146,7 @@ if (PE_parse_boot_argn("-no_slto_panic", &namep, sizeof(namep))) {
 - `GSI-PORT-PLAN.md` — 触屏 bring-up 的完整过程记录（v100→v113 每一版屏上证据与判读）。
 - `.github/workflows/build-kernel.yml` — CI（push `main` 自动编）。
 
-## payload 结构（FAT32，168 MiB）
+## payload 结构（FAT32，172 MiB）
 
 ```
 /EFI/UNIXNU/UNIXNU.TOM                 # 启动项：title / path / initrd / args
@@ -175,7 +175,7 @@ bash dopack.sh v123 keyscan        # → ~/payload-v123.img + 桌面 boot-hummer
 
 - push `main` 自动触发 `build-kernel`（macOS runner）；纯文档改动请带 `[skip ci]`。
 - 产物发布到 `ci-latest` rolling release：
-  - `payload.img`（~168 MiB）
+  - `payload.img`（~172 MiB）
   - `kernel.macho`（带符号，可反查崩溃地址对应的函数）
   - `ci-logs.tar.gz`（全部步骤日志）
 - 缓存：`out/ipsw`（~8 GiB，IPSW 只拉一次）、`.cache`（引擎树 + `xnu-work` 增量）、`out/feeds`。
