@@ -188,7 +188,17 @@ run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func','--globalize-
 def code(data,info):
     sec=next(s for g in info['segments'] for s in g['sections'] if s['name']=='__text');return data[sec['fileoff']:sec['fileoff']+sec['size']]
 require(code(raw,image)==code(late.read_bytes(),macho(late.read_bytes())),'Only owned initializer section registration changes')
-objects=[late,OUT/'original-bindings.o']
+# The GPU hand-off presenter (sheng-fb-gpu=1): its metaclass must be registered
+# after the original IOGPUFamily/IOMobileFramebuffer classes are loaded, so its
+# static initializer moves out of __mod_init_func exactly like the display's.
+print(run(['python3',ROOT/'scripts/build-stage7-driver.py','NativeGOPPresenter'],text=True),end='')
+presenter=OUT/'NativeGOPPresenter.o';presenter_raw=presenter.read_bytes()
+presenter_late=OUT/'NativeGOPPresenter.late.o'
+run([llvm/'llvm-objcopy','--remove-section=__DATA,__mod_init_func',
+     '--globalize-symbol=__GLOBAL__sub_I_NativeGOPPresenter.cpp',presenter,presenter_late])
+require(code(presenter_raw,macho(presenter_raw))==code(presenter_late.read_bytes(),macho(presenter_late.read_bytes())),
+        'Presenter late registration leaves instructions unchanged')
+objects=[presenter_late,late,OUT/'original-bindings.o']
 for component in ('Stage7Probe','NativeKeyStoreEvents','HummerHidInput'):
     print(run(['python3',ROOT/'scripts/build-stage7-driver.py',component],text=True),end='')
     directory=ROOT/'build'/('native-keystore-events' if component=='NativeKeyStoreEvents' else 'native-legacy-display')
@@ -261,6 +271,8 @@ objects += [hid_late,hid/'hid-original-bindings.o']
 archive=OUT/'libNativeLegacyDisplay.late.a';archive.unlink(missing_ok=True)
 run(['xcrun','ar','rcs',archive,*objects])
 sources=[ROOT/'drivers/NativeMobileDisplay/NativeLegacyDisplay.cpp',
+         ROOT/'drivers/NativeMobileDisplay/NativeGOPPresenter.cpp',
+         ROOT/'drivers/NativeMobileDisplay/NativeGOPWire.h',
          ROOT/'drivers/NativeMobileDisplay/NativeLegacyRequest.h',
          ROOT/'drivers/NativeKeyStoreEvents/NativeKeyStoreEvents.cpp',
          ROOT/'scripts/stage7/Stage7Probe.cpp',

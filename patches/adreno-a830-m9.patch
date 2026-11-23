@@ -1,0 +1,268 @@
+diff --git a/NativeAdrenoMemory.cpp b/NativeAdrenoMemory.cpp
+index 4496d96..ae3c4ce 100644
+--- a/NativeAdrenoMemory.cpp
++++ b/NativeAdrenoMemory.cpp
+@@ -284,6 +284,34 @@ IOReturn NativeAdrenoMemory::importTask(void *task,uint64_t address,size_t bytes
+ failed:
+     (void)release();return status;
+ }
++IOReturn NativeAdrenoMemory::importDevice(IOMemoryDescriptor *scanout,uint64_t offset,size_t bytes)
++{
++    if(descriptor_ || imported_ || spans_ || device_ || quarantined_)return kIOReturnBusy;
++    /* The plugin maps the scanout over whole pages: a framebuffer whose length is not a page multiple (hummer's 1264x2780) is imported
++     * rounded up, and the last page's tail lies beyond the descriptor but inside the same physical page. */
++    const uint64_t descriptorLength=scanout?(uint64_t)scanout->getLength():0;
++    if(!scanout || (offset&4095) || !bytes || (bytes&4095) || offset>UINT64_MAX-bytes || bytes>256u*1024u*1024u ||
++        descriptorLength>UINT64_MAX-4095 || offset+bytes>((descriptorLength+4095)&~UINT64_C(4095)))return kIOReturnBadArgument;
++    span_capacity_=bytes/4096;
++    spans_=IONewData(NativeAdrenoPhysicalSpan,span_capacity_);
++    if(!spans_) {span_capacity_=0;return kIOReturnNoMemory;}
++    for(size_t at=0;at<bytes;at+=4096) {
++        const size_t chunk=bytes-at<4096?bytes-at:4096;
++        IOByteCount length=0;
++        const addr64_t physical=scanout->getPhysicalSegment(offset+at,&length,kIOMemoryMapperNone);
++        if(!physical || (physical&4095) || length<chunk || physical>UINT64_MAX-4096) {
++            IODeleteData(spans_,NativeAdrenoPhysicalSpan,span_capacity_);
++            spans_=nullptr;span_count_=span_capacity_=0;
++            return kIOReturnUnsupported;
++        }
++        if(span_count_ && physical==spans_[span_count_-1].physical+spans_[span_count_-1].bytes)
++            spans_[span_count_-1].bytes+=4096;
++        else spans_[span_count_++]={at,physical,4096};
++    }
++    /* Device memory: no wiring, no kernel mapping, no cache maintenance; the GPU writes it non-cacheable. */
++    device_=true;prepared_=true;bytes_=bytes;mapping_=nullptr;read_only_=false;
++    return kIOReturnSuccess;
++}
+ IOReturn NativeAdrenoMemory::borrow(void *mapping,uint64_t physical,size_t bytes)
+ {
+     if(descriptor_ || imported_ || spans_ || quarantined_ || borrowed_)return kIOReturnBusy;
+@@ -361,6 +389,8 @@ IOReturn NativeAdrenoMemory::release()
+     if(owned_) {noteOwned(spans_,span_count_,false);owned_=false;}
+     if(system_) {noteSystem(-(int64_t)bytes_);system_=false;}
+     if(borrowed_) {borrowed_=false;prepared_=false;}
++    /* The presenter's descriptor of a device import was never retained or wired: only the spans go. */
++    if(device_) {device_=false;prepared_=false;}
+     if(spans_)IODeleteData(spans_,NativeAdrenoPhysicalSpan,span_capacity_);
+     mapping_=nullptr;spans_=nullptr;bytes_=span_count_=span_capacity_=0;read_only_=false;owner_uncached_=false;
+     return kIOReturnSuccess;
+@@ -389,6 +419,7 @@ IOReturn NativeAdrenoMemory::publishForDevice(size_t offset,size_t bytes,bool wr
+ {
+     if(!backed() || !prepared_ || quarantined_)return kIOReturnNotReady;
+     if(!bytes || ((offset|bytes)&4095) || offset>bytes_ || bytes>bytes_-offset)return kIOReturnBadArgument;
++    if(device_)return kIOReturnSuccess;   /* device memory (the scanout): no CPU cache holds it */
+     /* Pages every CPU mapping holds non-cacheable carry no line to clean. */
+     if(imported_ && owner_uncached_)return kIOReturnSuccess;
+     if(imported_) {NativeAdrenoNotePhase(phase,bytes);return maintainImported(offset,bytes,writes?NativeAdrenoCleanInvalidate:NativeAdrenoClean);}
+@@ -406,6 +437,7 @@ IOReturn NativeAdrenoMemory::acquireDeviceWrites(size_t offset,size_t bytes,unsi
+ {
+     if(!backed() || !prepared_ || quarantined_)return kIOReturnNotReady;
+     if(!bytes || ((offset|bytes)&4095) || offset>bytes_ || bytes>bytes_-offset)return kIOReturnBadArgument;
++    if(device_)return kIOReturnSuccess;   /* the scanout: the GPU writes it non-cacheable */
+     if(imported_ && owner_uncached_)return kIOReturnSuccess;
+     /* Imported pages may hold the owner's unrelated dirty lines next to the GPU's writes: clean as well as invalidate. */
+     if(imported_) {NativeAdrenoNotePhase(phase,bytes);return maintainImported(offset,bytes,NativeAdrenoCleanInvalidate);}
+diff --git a/NativeAdrenoMemory.h b/NativeAdrenoMemory.h
+index ce577c7..25b5644 100644
+--- a/NativeAdrenoMemory.h
++++ b/NativeAdrenoMemory.h
+@@ -52,7 +52,7 @@ class NativeAdrenoMemory final {
+     NativeAdrenoPhysicalSpan *spans_=nullptr;
+     size_t bytes_=0,span_count_=0,span_capacity_=0;
+     uint32_t device_references_=0;
+-    bool prepared_=false,quarantined_=false,write_combined_=false,system_=false,borrowed_=false,owned_=false;
++    bool prepared_=false,quarantined_=false,write_combined_=false,system_=false,borrowed_=false,owned_=false,device_=false;
+     IOReturn takeSegments(IOBufferMemoryDescriptor *,size_t bytes,uint64_t limit,bool contiguous);
+     IOReturn maintainImported(size_t offset,size_t bytes,NativeAdrenoCacheOperation);
+ public:
+@@ -91,10 +91,15 @@ public:
+      * There is no kernel mapping: the owner keeps its CPU mapping and does its own cache maintenance around GPU use, so
+      * publishForDevice/acquireDeviceWrites have nothing to do for this object. Spans and PA bounds are checked as for allocate. */
+     IOReturn importTask(void *task,uint64_t address,size_t bytes,unsigned output_bits,size_t byte_budget);
++    /* M9: device memory outside the XNU window (the hand-off scanout), as the presenter's IODeviceMemory describes it. Its physical
++     * pages become the BO; there is no wiring, no kernel mapping and no cache maintenance, and the GPU writes it non-cacheable. */
++    IOReturn importDevice(IOMemoryDescriptor *scanout,uint64_t offset,size_t bytes);
+     /* Takes over a contiguous block another object owns (its kernel mapping, physical address and size), zeroed here; release() only
+      * forgets it. The process address spaces' page tables come from such blocks, reserved cacheable at bring-up. */
+     IOReturn borrow(void *mapping,uint64_t physical,size_t bytes);
+     bool imported() const {return imported_!=nullptr;}
++    /* The hand-off scanout: device memory, never coherent, no CPU cache holds it. */
++    bool scanout() const {return device_;}
+     /* Memory from allocateSystem: the VM owns its pages' attribute, and its client views map the descriptor. */
+     bool system() const {return system_;}
+     /* An import of memory the owner maps read-only (the kernel could pin it for reading only): the GPU may read it, never write it. */
+@@ -110,7 +115,7 @@ public:
+      * object's own attribute. The submissions' line audit still covers every object. */
+     IOReturn reassertWriteCombined(uint32_t *reset) const
+     {return write_combined_ && span_count_ && !system_?NativeAdrenoReassertWriteCombined(spans_,span_count_,reset):kIOReturnSuccess;}
+-    bool backed() const {return descriptor_ || imported_ || borrowed_;}
++    bool backed() const {return descriptor_ || imported_ || borrowed_ || device_;}
+     /* Refuses device references/quarantine; only clears ownership after real
+      * descriptor complete() succeeds. No automatic reset or resource recycling. */
+     IOReturn release();
+diff --git a/NativeAdrenoPublish.cpp b/NativeAdrenoPublish.cpp
+index 7d4b4c6..2ab234d 100644
+--- a/NativeAdrenoPublish.cpp
++++ b/NativeAdrenoPublish.cpp
+@@ -811,10 +811,22 @@ IOReturn AGXDeviceUserClient::runTimed(uint32_t method,const void *input,size_t
+         NativeAdrenoAbiBoImport request{};
+         memcpy(&request,input,sizeof(request));
+         NativeAdrenoAbiBoAllocReply reply{};
++        task_t task=current_task();
++        /* M9: a range inside the task's mapping of the hand-off scanout (memory type 0x5343) becomes a BO of the presenter's own
++         * physical range; the mapping is found here, without creating a second one. */
++        NativeAdrenoScanoutMapping scanout{};
++        IOMemoryDescriptor *scanoutMemory=native_gop_handoff_memory();   /* retained for this call; the presenter keeps its own */
++        if(scanoutMemory) {
++            IOMemoryMap *map=scanoutMemory->createMappingInTask(task,0,kIOMapAnywhere|kIOMapReference,0,0);
++            if(map) {scanout={task,map->getAddress(),map->getLength(),scanoutMemory};map->release();}
++        }
+         native_adreno_metal_diag.inflight=method+1;
+         lockTimed(lockWait);
+-        const IOReturn status=live_?core_->importBo(&request,current_task(),&reply):kIOReturnNotReady;
++        if(live_ && scanout.memory)core_->setScanout(&scanout);
++        const IOReturn status=live_?core_->importBo(&request,task,&reply):kIOReturnNotReady;
++        if(live_)core_->setScanout(nullptr);
+         unlockTimed(lockWait);
++        if(scanoutMemory)scanoutMemory->release();
+         native_adreno_metal_diag.inflight=0;
+         native_adreno_metal_diag.calls=native_adreno_metal_diag.calls+1;
+         native_adreno_metal_diag.last_selector=method;
+diff --git a/NativeAdrenoUserClient.cpp b/NativeAdrenoUserClient.cpp
+index 71a7abb..6eeedd7 100644
+--- a/NativeAdrenoUserClient.cpp
++++ b/NativeAdrenoUserClient.cpp
+@@ -67,7 +67,7 @@ void NativeAdrenoUserClient::clear(Entry &entry)
+     index_.erase(entry.handle);
+     const size_t index=entry.index;if(index<free_hint_)free_hint_=index;
+     entry.handle=0;entry.mapped=0;entry.iova=0;entry.used=false;
+-    entry.mapped_state=false;entry.unreleasable=false;entry.imported=false;entry.metadata_bytes=0;
++    entry.mapped_state=false;entry.unreleasable=false;entry.imported=false;entry.scanout=false;entry.metadata_bytes=0;
+     entry.token=0;entry.mapping_leases=0;
+ }
+ /* A free entry, with room in the handle index for it to be published; null without memory. */
+@@ -141,7 +141,7 @@ IOReturn NativeAdrenoUserClient::open(uint32_t abi_version,NativeAdrenoVm *vm,
+     if(!growQueues()) {releaseEntries();index_.release();return kIOReturnNoMemory;}
+     free_hint_=0;live_=0;
+     vm_=vm;submit_=submit;ring_=ring;input_bits_=input_bits;output_bits_=output_bits;
+-    next_handle_=1;open_=true;
++    next_handle_=1;open_=true;scanout_={};
+     queues_[0]={0,true};
+     /* Each client is a new GPU context for the CP (useContext before each submission). */
+     static uint32_t contexts;
+@@ -173,6 +173,7 @@ IOReturn NativeAdrenoUserClient::close()
+     if(queues_)IODeleteData(queues_,Queue,queue_capacity_);
+     queues_=nullptr;queue_capacity_=0;
+     queue_base_=0;scoped_=used_=false;window_start_=window_bytes_=window_peak_=0;
++    scanout_={};
+     open_=false;vm_=nullptr;submit_=nullptr;ring_=nullptr;timer_=nullptr;status_=nullptr;info_=nullptr;
+     return kIOReturnSuccess;
+ }
+@@ -205,6 +206,20 @@ uint32_t NativeAdrenoUserClient::mappingLeases(uint32_t token) const
+     const Entry &entry=at(token-1);
+     return entry.used && entry.token==token?entry.mapping_leases:0;
+ }
++void NativeAdrenoUserClient::setScanout(const NativeAdrenoScanoutMapping *mapping)
++{
++    const bool valid=mapping && mapping->task && mapping->memory && mapping->bytes && !((mapping->start|mapping->bytes)&4095) &&
++        mapping->start+mapping->bytes>mapping->start;
++    scanout_=valid?*mapping:NativeAdrenoScanoutMapping{};
++}
++bool NativeAdrenoUserClient::isScanoutAddress(void *task,uint64_t address,uint64_t bytes,uint64_t *offset) const
++{
++    if(offset)*offset=0;
++    if(!task || task!=scanout_.task || !scanout_.memory || !bytes)return false;
++    if(address<scanout_.start || address-scanout_.start>scanout_.bytes || bytes>scanout_.bytes-(address-scanout_.start))return false;
++    if(offset)*offset=address-scanout_.start;
++    return true;
++}
+ IOReturn NativeAdrenoUserClient::query(NativeAdrenoAbiParams *params)
+ {
+     if(!params)return kIOReturnBadArgument;
+@@ -290,15 +305,20 @@ IOReturn NativeAdrenoUserClient::importBo(const NativeAdrenoAbiBoImport *request
+     }
+     Entry *entry=free();
+     if(!entry) {noteImport(kIOReturnNoResources,2,request->bytes,request->address);return kIOReturnNoResources;}
+-    const IOReturn status=entry->memory.importTask(task,request->address,(size_t)request->bytes,output_bits_,(size_t)request->bytes);
++    /* M9: the hand-off scanout lies outside the XNU memory window and has no managed pages to wire: its BO is the presenter's own
++     * physical range. */
++    uint64_t offset=0;
++    const bool scanout=isScanoutAddress(task,request->address,request->bytes,&offset);
++    const IOReturn status=scanout?entry->memory.importDevice(scanout_.memory,offset,(size_t)request->bytes):
++        entry->memory.importTask(task,request->address,(size_t)request->bytes,output_bits_,(size_t)request->bytes);
+     if(status) {
+-        noteImport(status,native_adreno_import_stage,request->bytes,request->address);
++        noteImport(status,scanout?5:native_adreno_import_stage,request->bytes,request->address);
+         clear(*entry);
+         if(entry->memory.release()!=kIOReturnSuccess) {entry->used=true;entry->unreleasable=true;++live_;}
+         return status;
+     }
+     publish(*entry);
+-    entry->mapped=0;entry->iova=0;entry->mapped_state=false;entry->imported=true;
++    entry->mapped=0;entry->iova=0;entry->mapped_state=false;entry->imported=true;entry->scanout=scanout;
+     reply->handle=entry->handle;
+     native_adreno_import_live[0]=native_adreno_import_live[0]+1;
+     {
+diff --git a/NativeAdrenoUserClient.h b/NativeAdrenoUserClient.h
+index 9715da0..8c014e0 100644
+--- a/NativeAdrenoUserClient.h
++++ b/NativeAdrenoUserClient.h
+@@ -6,6 +6,16 @@
+ #include "NativeAdrenoTimer.h"
+ #include "NativeAdrenoStatus.h"
+ #include "NativeAdrenoHandleIndex.h"
++class IOMemoryDescriptor;
++/* The display hand-off scanout (memory type 0x5343) as one task maps it (M9):
++ * [start, start + bytes) in task, backed by memory (the presenter's
++ * IODeviceMemory; outside the XNU memory window, so its pages cannot be wired
++ * as user pages). */
++struct NativeAdrenoScanoutMapping {
++    void *task;
++    uint64_t start,bytes;
++    IOMemoryDescriptor *memory;
++};
+ 
+ /* Kernel-side body of the Adreno user client, deliberately free of IOKit so it
+  * can be exercised on a host. The future IOService/IOUserClient wrapper only
+@@ -25,6 +35,7 @@ class NativeAdrenoUserClient final {
+         bool mapped_state=false;
+         bool unreleasable=false;
+         bool imported=false;
++        bool scanout=false;   /* imported from the hand-off scanout: device memory, never coherent */
+         uint32_t metadata_bytes=0;
+         uint32_t token=0;
+         uint32_t mapping_leases=0;
+@@ -75,6 +86,9 @@ class NativeAdrenoUserClient final {
+     uint64_t window_start_=0,window_bytes_=0,window_peak_=0;
+     uint64_t next_handle_=1;
+     bool open_=false;
++    /* The task's current mapping of the hand-off scanout: set for the duration of one BoImport (the publisher finds it through
++     * clientMemoryForType's 0x5343 descriptor), never retained. */
++    NativeAdrenoScanoutMapping scanout_{};
+     NativeAdrenoSystemPages *offered_pages_=nullptr,*freed_pages_=nullptr;
+     Entry *find(uint64_t);
+     Entry *free();
+@@ -110,6 +124,10 @@ public:
+     IOReturn releaseAll(const NativeAdrenoRingClock *,uint32_t timeout_us);
+     /* Backing object of a token returned by cpuMap while its lease is held (clientMemoryForType); null otherwise. */
+     NativeAdrenoMemory *memoryForToken(uint32_t token);
++    /* The publisher's scanout mapping for the current BoImport; nullptr clears it. */
++    void setScanout(const NativeAdrenoScanoutMapping *);
++    /* Whether [address, address + bytes) lies inside the task's scanout mapping; *offset is its offset into the scanout. */
++    bool isScanoutAddress(void *task,uint64_t address,uint64_t bytes,uint64_t *offset) const;
+     /* CPU mappings of the BO of this token that BoCpuMap handed out and BoCpuUnmap has not given back; 0 for no such BO. */
+     uint32_t mappingLeases(uint32_t token) const;
+     IOReturn query(NativeAdrenoAbiParams *);
+diff --git a/NativeAdrenoVm.cpp b/NativeAdrenoVm.cpp
+index 83b59f6..2960e5c 100644
+--- a/NativeAdrenoVm.cpp
++++ b/NativeAdrenoVm.cpp
+@@ -298,6 +298,8 @@ IOReturn NativeAdrenoVm::map(NativeAdrenoMemory *memory,unsigned upper,uint64_t
+ {
+     if(!handle)return kIOReturnBadArgument;*handle=0;result_={};
+     if(!attached_ || poisoned_)return kIOReturnNotReady;
++    /* The hand-off scanout is device memory: never map it write-back (the GPU writes it non-cacheable). */
++    if(memory && memory->scanout())writeback=0;
+     PhaseClock clock;
+     const unsigned cls=aliasClass(permissions,writeback,shareability)&15;
+     /* Room for the new spans' table transaction and their alias index. */

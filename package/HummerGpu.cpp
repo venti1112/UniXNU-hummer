@@ -77,27 +77,21 @@ extern "C" IOService *native_adreno_accelerator_allocate(void) __attribute__((we
 extern "C" unsigned native_adreno_accelerator_instance_size(void) __attribute__((weak));
 
 /* NativeAdrenoPublish.cpp (the AGXDeviceUserClient behind the Metal service)
- * imports the display driver's UEFI-GOP handoff: the framebuffer the bootloader
- * left behind, handed to the GPU so the first scanout is a render rather than a
- * copy. hummer has no such provider (its panel path is the early-console
- * renderer, and the legacy display driver owns scanout), so the handoff is
- * refused here. That costs nothing on this board: attach still publishes the
- * service, and nothing asks for the handoff unless a client does.
+ * imports the display driver's handoff entry points (native_gop_handoff_*).
+ * They are provided by NativeGOPPresenter.cpp, which scripts/build-stage7-
+ * display.py now compiles into libNativeLegacyDisplay.late.a; without the
+ * presenter the display simply keeps its CPU copy path.
  *
  * boot_log_export_put is the boot-progress log export; this board does not build
- * that driver either (package/Stage7Status.cpp explains why), so the kernel log
- * stays in the kernel. All four are declared weak_import in the driver, which a
- * statically linked kernel refuses -- they have to be defined. */
-extern "C" IOReturn native_gop_handoff_call(uint32_t, task_t, const void *, size_t,
-                                            void *, size_t) {return kIOReturnUnsupported;}
-extern "C" IOMemoryDescriptor *native_gop_handoff_memory(void) {return nullptr;}
-extern "C" void native_gop_handoff_close(task_t) {}
+ * that driver (package/Stage7Status.cpp explains why), so the kernel log stays in
+ * the kernel. It is declared weak_import in the driver, which a statically linked
+ * kernel refuses -- it has to be defined. */
 extern "C" int boot_log_export_put(uint32_t, uint32_t, uint32_t, const void *, uint32_t) {return -1;}
 
 /* NativeAdrenoMemory.cpp declares this weak_import and calls it only to count the
  * pages of a BO that a user task still maps before it frees them. A statically
- * linked kernel refuses a dangling weak_import -- the same reason the four stubs
- * above exist -- and XNU exposes no "which process maps this physical page" query
+ * linked kernel refuses a dangling weak_import -- the same reason the stub
+ * above exists -- and XNU exposes no "which process maps this physical page" query
  * outside pmap. Answer "nobody": the driver's free_user_mapped counter stays zero
  * instead of the link failing. */
 extern "C" unsigned int native_pmap_user_mappings(ppnum_t, void **, uint64_t *, char *) {return 0;}

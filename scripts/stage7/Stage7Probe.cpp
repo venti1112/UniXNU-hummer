@@ -16,16 +16,24 @@ extern "C" int boot_progress_display_handoff(void);
 extern "C" void boot_progress_display_failed(void);
 extern "C" void boot_progress_display_status(const char *,uint64_t);
 extern "C" void native_legacy_display_static_init(void) __asm__("__GLOBAL__sub_I_NativeLegacyDisplay.cpp");
+extern "C" void native_gop_presenter_static_init(void) __asm__("__GLOBAL__sub_I_NativeGOPPresenter.cpp");
 extern "C" void native_keyevents_static_init(void) __asm__("__GLOBAL__sub_I_NativeKeyStoreEvents.cpp");
 extern "C" IOService *native_legacy_display_allocate(void),*native_keyevents_allocate(void);
+extern "C" IOService *native_gop_presenter_create(void);
+extern "C" void native_gop_presenter_set_source(IOService *,IOService *);
+extern "C" bool native_gop_gpu_offer(IOService *,void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t);
+// The Adreno driver imports this only for a handoff-only connection; a missing
+// strong definition would leave a dangling weak_import in the static kernel.
+extern "C" void native_gop_handoff_close(task_t) {}
 // Offline HID input device (package/HummerHidInput.cpp + drivers/NativeHidInput).
 // Strong reference on purpose: a weak one would not pull HummerHidInput.o out of
 // the archive, so the symbol would resolve to nothing at link time and the device
 // would never start. The archive always carries that object.
 extern "C" void native_hid_input_probe(void);
 static IOService *pendingDisplay;
+static IOService *gpuPresenter;
 static bool displayInitialized,ephemeralState;
-static uint64_t frames,clients,aksCalls,aksOpens;
+static uint64_t frames,clients,aksCalls,aksOpens,gpuFallbacks;
 
 static void progress(const char *detail,uint64_t value) {boot_progress_display_status(detail,value);}
 static bool enabled(const char *name) {
@@ -77,9 +85,16 @@ void native_legacy_transfer_observed(IOReturn status,const void *,uint64_t) {
 }
 void native_legacy_copy_timing_observed(uint64_t,uint64_t) {}
 void native_legacy_retirement_observed(IOService *) {}
-// shortcut: CPU scanout only until the SM8750 GPU and its synchronization are implemented.
-bool native_legacy_gpu_offer(void *,IOMemoryDescriptor *,uint64_t,uint32_t,uint32_t) {return false;}
-void native_legacy_gpu_fallback_observed(int) {}
+// GPU hand-off (sheng-fb-gpu=1): the presenter copies the compositor's frame into
+// the firmware scanout on the A830, and the swap retires when that copy finishes.
+// A refused offer or a failed copy keeps the CPU path (NativeLegacyDisplay counts
+// it). Without a presenter every offer is refused, so the argument alone is safe.
+bool native_legacy_gpu_offer(void *display,IOMemoryDescriptor *memory,uint64_t stride,uint32_t width,uint32_t height) {
+    return gpuPresenter && native_gop_gpu_offer(gpuPresenter,display,memory,stride,width,height);
+}
+void native_legacy_gpu_fallback_observed(int status) {
+    if(++gpuFallbacks==1)progress("GPU frame fallback",(uint32_t)status);
+}
 void native_keyevents_open_refused(void) {progress("key state open refused",0);}
 bool native_aks_state_enabled(void) {return ephemeralState;}
 uint32_t native_aks_lock_state(void) {return 0;}
@@ -122,6 +137,21 @@ extern "C" int hummer_gpu_start(void);
 // ceiling -- none of them touch anything before that check.
 extern "C" void hummer_cpufreq_init(void);
 
+// The GPU hand-off presenter (sheng-fb-gpu=1). It is attached to the resource
+// service, not under the display subsystem's node: the original display code
+// enumerates that node's children, so the presenter there hides the display
+// (sheng int-075/077). Its scanout memory comes from the display's own nub.
+static void startPresenter(IOService *nub) {
+    if(!enabled("sheng-fb-gpu") || gpuPresenter)return;
+    if(!registerClass(native_gop_presenter_static_init)){progress("GPU hand-off class failed",0);return;}
+    IOService *presenter=native_gop_presenter_create();
+    IOService *home=IOService::getResourceService();
+    bool attached=false;
+    if(presenter && home)native_gop_presenter_set_source(presenter,nub);
+    if(presenter && home && presenter->init() && (attached=presenter->attach(home)) && presenter->start(home))gpuPresenter=presenter;
+    else {if(attached)presenter->detach(home);OSSafeReleaseNULL(presenter);}
+    progress("GPU hand-off presenter",gpuPresenter!=nullptr);
+}
 extern "C" void native_legacy_display_probe(void) {
     if(displayInitialized)return;
     displayInitialized=true;
@@ -205,6 +235,9 @@ extern "C" void native_legacy_display_late_probe(void) {
         }
     }
     progress("GOP display started",started);
+    // The GPU hand-off needs the display's framebuffer nub; start it only once
+    // the display runs, so a failed display leaves no client waiting forever.
+    if(started)startPresenter(nub);
     OSSafeReleaseNULL(ranges);OSSafeReleaseNULL(memory);OSSafeReleaseNULL(typeData);
     if(!started) {
         if(attached)display->detach(nub);

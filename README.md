@@ -20,7 +20,7 @@ OnePlus Ace 5 Pro（`hummer` / PKR110 / SM8750 骁龙 8 Elite）的 UniXNU 设�
 | 触屏（Synaptics S3910） | ✅ 可点可划，方向正确 | v112 / v113 |
 | 6 核 SMP | ✅ `processor_count=6 avail=6` | v120 |
 | 按键（音量/电源） | 🟡 引脚扫描版已提交，等真机读引脚号 | v123 |
-| GPU（Adreno 830） | ⬜ 只有 `HummerAdrenoProbe.c` 探针 | — |
+| GPU（Adreno 830） | 🟡 A830 驱动链 + Metal 用户态（Turnip/metal2vulkan）+ GPU presenter 已接入，待真机验收 | — |
 | WiFi | ⬜ | — |
 | 8 核（2 个 Oryon prime） | ⬜ Aff2 拓扑未接 | — |
 | 常驻刷入（替代 `fastboot boot`） | ⬜ | — |
@@ -202,7 +202,9 @@ bash dopack.sh v123 keyscan        # → ~/payload-v123.img + 桌面 boot-hummer
 1. **按键** — 先跑 `hummer-keyscan=1` 读出音量键焊盘编号（只读扫描输入位，按下保持 ~240 ms 就报），
    然后在 HID consumer collection 里补 `0xE9/0xEA/0x30`（音量±/电源）并发 report。电源键走 PMIC PON，
    需要 SPMI，放后面。
-2. **GPU** — Adreno 830 / KGSL，SpringBoard 目前是纯 CPU 合成。
+2. **GPU** — A830 全链、Metal 用户态和 GPU presenter 已接进流水线；下一步是上机读
+   `GPU start` 返回码和 `GPU hand-off presenter`，再调 13T 的 DCVS/早退役参数。
+   驱动侧 `patches/adreno-a830-m9.patch` 补了 scanout 导入（0x5343 → GPU BO）。
 3. **WiFi** — 高通 WCN 系列，需要 PCIe + 固件下载。
 4. **8 核** — 两个 Oryon prime 在 MPIDR **Affinity2**，而 XNU 拓扑只用 Aff1/0，且
    `MAX_CPU_CLUSTERS` 正好被 6 个核占满。要一起改：XNU 拓扑映射、`start.s` 的 MPIDR 掩码、

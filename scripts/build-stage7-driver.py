@@ -9,7 +9,7 @@ import subprocess
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('component', choices=['NativeLegacyDisplay', 'NativeKeyStoreEvents', 'Stage7Probe', 'HummerHidInput', 'NativeHidInput'])
+parser.add_argument('component', choices=['NativeLegacyDisplay', 'NativeGOPPresenter', 'NativeKeyStoreEvents', 'Stage7Probe', 'HummerHidInput', 'NativeHidInput'])
 component = parser.parse_args().component
 directory = root / 'build' / ('native-keystore-events' if component == 'NativeKeyStoreEvents' else
                              'native-hid-input' if component == 'NativeHidInput' else 'native-legacy-display')
@@ -17,7 +17,7 @@ directory.mkdir(parents=True, exist_ok=True)
 source = (root / 'scripts/stage7/Stage7Probe.cpp' if component == 'Stage7Probe' else
           # package/ maps to kits/hummer in the assembled tree (board.toml kit = "hummer").
           root / 'kits/hummer/HummerHidInput.cpp' if component == 'HummerHidInput' else
-          root / 'drivers' / ('NativeMobileDisplay' if component == 'NativeLegacyDisplay' else component) / (component + '.cpp'))
+          root / 'drivers' / ('NativeMobileDisplay' if component in ('NativeLegacyDisplay', 'NativeGOPPresenter') else component) / (component + '.cpp'))
 record = json.loads((root / 'build/xnu/ios-obj/DEVELOPMENT_ARM64_BCM2837/iokit/DEVELOPMENT/IOPlatformExpert.cpo.json').read_text().strip().rstrip(','))
 obj = directory / (component + '.o')
 compile_command = runpy.run_path(str(root / 'scripts/build-arm-platform.py'))['compile_command']

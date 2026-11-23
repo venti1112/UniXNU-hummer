@@ -286,6 +286,15 @@ kernel_args = [
   # 加载 Metal 加速器。每一步在屏上留名字，卡住能看出卡在哪。
   # 注意：hummer_gpu_start() 自己不 panic，失败只报状态并继续开机。
   "hummer-adreno-bringup=1",
+  # GPU 合成的两半（照 13T 的 pagani-gpu=1 配方）：
+  #   sheng-gpu-addon=1  引擎 zzy-native-gpu-addon-mount.patch 把 Data 种子里的
+  #                      /private/var/ngpu/addons 只读 bind 到
+  #                      /System/Library/Extensions —— backboardd 的 Metal 发现
+  #                      在那里找 NativeAdrenoMetal.bundle。
+  #   sheng-fb-gpu=1     显示把每帧 IOSurface 交给 NativeGOPPresenter，由 GPU
+  #                      拷进固件 scanout；缺插件/缺 presenter 时 offer 被拒，
+  #                      自动回到 CPU memcpy（不会黑屏）。
+  "sheng-gpu-addon=1", "sheng-fb-gpu=1",
   # CPU 调频（package/HummerCpufreq.c，SCMI performance 协议 0x13，
   # 从 REDMI K90 的 annibale_cpufreq.c 移植）。
   #   2 = 只报告（协议版本、每域当前档位和档位表、温度读数），不动频率

@@ -1,0 +1,22 @@
+diff --git a/NativeGOPPresenter.cpp b/NativeGOPPresenter.cpp
+index 83dae5e..07c5078 100644
+--- a/NativeGOPPresenter.cpp
++++ b/NativeGOPPresenter.cpp
+@@ -88,11 +88,15 @@ bool NativeGOPPresenter::start(IOService *provider) {
+     // The hand-off presenter is attached away from the display subsystem's node (the original display code enumerates that node's children),
+     // so the framebuffer memory comes from the node it names instead of its provider.
+     mapping=(memorySource?memorySource:provider)->mapDeviceMemoryWithIndex(0,kIOMapInhibitCache);
++    /* The mapping covers whole pages; a framebuffer whose length is not a page multiple (hummer's 1264x2780) maps up to one page larger
++     * than its last row ends. The mode keeps the framebuffer's real length; the GPU client rounds its import the same way. */
++    const uint64_t framebufferBytes=(uint64_t)video.v_rowBytes*video.v_height;
++    const uint64_t mappedBytes=mapping?mapping->getLength():0;
+     if(!mapping || !mapping->getVirtualAddress() || mapping->getPhysicalAddress()!=video.v_baseAddr ||
+-       mapping->getLength()!=video.v_rowBytes*video.v_height)return false;
++       mappedBytes<framebufferBytes || mappedBytes-framebufferBytes>=4096)return false;
+     gate=IOLockAlloc();if(!gate)return false;
+     {unsigned v=0;PE_parse_boot_argn("sheng-fb-gpu",&v,sizeof v);gpuMode=(v==1);}
+-    mode={NGP_VERSION,NGP_BGRX8888,video.v_width,video.v_height,video.v_rowBytes,mapping->getLength()};
++    mode={NGP_VERSION,NGP_BGRX8888,video.v_width,video.v_height,video.v_rowBytes,framebufferBytes};
+     native_gop_physical=mapping->getPhysicalAddress();native_gop_virtual=mapping->getVirtualAddress();
+     online=true;native_gop_ready=1;if(gpuMode)gHandoff=this;registerService();return true;
+ }
