@@ -105,6 +105,33 @@ prep_mask(struct prep *c, uint64_t address, uint32_t mask, uint32_t set)
     return prep_write(c, address, value);
 }
 
+/* The M31 eUSB2 PHY exposes byte-wide registers; a 32-bit access is not a
+ * substitute (the stock firmware writes bytes). Profiles that do not provide
+ * byte callbacks cannot run the M31 sequence. */
+static int
+prep_read8(struct prep *c, uint64_t address, uint8_t *value)
+{
+    if (!c->p->read8 || !c->p->read8(c->p->cookie, address, value)) {
+        return 0;
+    }
+    if (c->last) {
+        *c->last = *value;
+    }
+    return 1;
+}
+
+static int
+prep_write8(struct prep *c, uint64_t address, uint8_t value)
+{
+    if (!c->p->write8 || !c->p->write8(c->p->cookie, address, value)) {
+        return 0;
+    }
+    if (c->last) {
+        *c->last = value;
+    }
+    return 1;
+}
+
 static void
 prep_delay(struct prep *c, uint32_t usec)
 {
@@ -128,12 +155,23 @@ prep_power(struct prep *c)
         return QPREP_DEADLINE;
     }
     for (i = 0; i < 200u; ++i) {
+#if QUD_GDSC_LEGACY_PWR_ON
         if (!prep_read(c, QUD_GCC_BASE + QUD_GCC_GDSCR_OFFSET, &value)) {
             return QPREP_DEADLINE;
         }
         if (value & GDSCR_PWR_ON) {
             return QPREP_OK;
         }
+#else
+        /* qcom,support-cfg-gdscr: the live state is CFG_GDSCR
+         * POWER_UP_COMPLETE bit16, not legacy GDSCR.PWR_ON bit31. */
+        if (!prep_read(c, QUD_GCC_BASE + QUD_GCC_CFG_GDSCR_OFFSET, &value)) {
+            return QPREP_DEADLINE;
+        }
+        if (value & (1u << 16)) {
+            return QPREP_OK;
+        }
+#endif
         prep_delay(c, 100);
     }
     return QPREP_GDSC;
@@ -227,10 +265,56 @@ prep_identity(struct prep *c)
     return QPREP_OK;
 }
 
-/* femto HS PHY: msm_hsphy_init() order, then the D+ pulse with XCVRSEL at 0x40. */
+/* HS PHY: the profile selects the block. SM8750 uses the byte-wide M31 eUSB2
+ * sequence; older boards keep the SM8150 femto sequence. */
 static QCOM_PREPARE_RESULT
 prep_phy(struct prep *c)
 {
+#if defined(QUD_PHY_M31) && QUD_PHY_M31
+    /* The stock firmware's M31 sequence (PianoDwc3 kM31Init, measured on the
+     * same SM8750): override and POR asserted, 38.4 MHz reference, factory
+     * tuning, then POR released. The reset pulse was done by prep_reset(). */
+    static const struct { uint32_t off; uint32_t val; uint32_t delay; } init[] = {
+        {0x94u, 2u, 0u}, {0x50u, 2u, 10u},
+        {0x154u, 1u, 0u}, {0xb8u, 1u, 0u}, {0x54u, 0x69u, 0u},
+        {0x16cu, 0u, 0u}, {0x17cu, 7u, 0u}, {0x168u, 0u, 0u},
+        {0x15cu, 0u, 0u}, {0x64u, 0x0fu, 0u}, {0x64u, 0x0fu, 0u},
+        {0x3cu, 1u, 0u}, {0x54u, 0x6bu, 0u}, {0x54u, 0x6bu, 0u},
+        {0x50u, 0u, 0u}, {0x64u, 7u, 0u}, {0x94u, 0u, 20u},
+    };
+    uint8_t common0 = 0, por = 0, hs = 0, ov = 0;
+    unsigned int i;
+
+    if (!c->p->write8 || !c->p->read8) {
+        return QPREP_ARG;
+    }
+    for (i = 0; i < sizeof(init) / sizeof(init[0]); ++i) {
+        if (!prep_write8(c, QUD_PHY_BASE + init[i].off, (uint8_t)init[i].val)) {
+            return QPREP_DEADLINE;
+        }
+        if (init[i].delay) {
+            prep_delay(c, init[i].delay);
+        }
+    }
+    if (!prep_read8(c, QUD_PHY_BASE + 0x54u, &common0) ||
+        !prep_read8(c, QUD_PHY_BASE + 0x50u, &por) ||
+        !prep_read8(c, QUD_PHY_BASE + 0x64u, &hs) ||
+        !prep_read8(c, QUD_PHY_BASE + 0x94u, &ov)) {
+        return QPREP_DEADLINE;
+    }
+    /* Ready: COMMON0 enable/retain/frequency, POR deasserted, USB2 suspend
+     * released, override off (PianoDwc3 m31Ready()). */
+    if ((common0 & 0x07u) != 0x03u || ((common0 >> 4) & 0x07u) != 0x06u ||
+        (por & 0x02u) || !(hs & 0x04u) || (ov & 0x02u)) {
+        return QPREP_PHY;
+    }
+    /* The core's QSCRATCH VBUS/session bit is independent of the PHY. */
+    if (!prep_mask(c, QUD_DWC3_BASE + QUD_QSCRATCH_HS_PHY_CTRL_OFFSET,
+                   QUD_QSCRATCH_VBUS_MASK, QUD_QSCRATCH_VBUS_MASK)) {
+        return QPREP_DEADLINE;
+    }
+    return QPREP_OK;
+#else
     uint32_t value;
     unsigned int i;
 
@@ -274,6 +358,7 @@ prep_phy(struct prep *c)
                    QUD_QSCRATCH_VBUS_MASK, QUD_QSCRATCH_VBUS_MASK)) return QPREP_DEADLINE;
     (void)i;
     return QPREP_OK;
+#endif
 }
 
 /* The core latches CORESOFTRESET: software has to clear it, exactly as Linux
@@ -315,6 +400,15 @@ prep_core(struct prep *c)
     QCOM_PREPARE_RESULT result;
     uint32_t value;
     unsigned int i;
+
+#if defined(QUD_QSCRATCH_GENERAL_CFG_OFFSET)
+    /* HS-only port: use the M31 UTMI clock as the core's PIPE clock before the
+     * core is reset. The QMP PHY (and its SuperSpeed lanes) is not brought up. */
+    if (!prep_mask(c, QUD_DWC3_BASE + QUD_QSCRATCH_GENERAL_CFG_OFFSET,
+                   QUD_QSCRATCH_UTMI_CLK_SEL, QUD_QSCRATCH_UTMI_CLK_SEL)) {
+        return QPREP_DEADLINE;
+    }
+#endif
 
     result = prep_core_reset(c);
     if (result != QPREP_OK) return result;

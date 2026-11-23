@@ -114,6 +114,9 @@ INCLUDES = [
     'kits/AdrenoPM4',
     'kits/AdrenoFirmware',
     'kits/hummer',
+    # HummerGpu.cpp reports the USB debug console's init stage through
+    # QcomXnuUsbDebug.h when a failed console is the only remaining question.
+    'kits/hummer/usbcdc/include',
     # package/HummerGpu.cpp includes Sm8750GpuFirmware.h, which this script
     # generates next to the assembly blob it describes.
     'build/native-adreno',

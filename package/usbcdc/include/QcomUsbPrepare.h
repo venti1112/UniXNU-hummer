@@ -10,6 +10,8 @@
 typedef struct {
     int  (*read32)(void *cookie, uint64_t address, uint32_t *value);
     int  (*write32)(void *cookie, uint64_t address, uint32_t value);
+    int  (*read8)(void *cookie, uint64_t address, uint8_t *value);
+    int  (*write8)(void *cookie, uint64_t address, uint8_t value);
     void  *cookie;
     void (*delay_us)(void *cookie, uint32_t usec);
     uint64_t deadline;          /* absolute CNTPCT, 0 = no deadline */

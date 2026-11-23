@@ -309,6 +309,27 @@ static volatile uint32_t *mmio(uint64_t physical)
     }
     return (volatile uint32_t *)(uintptr_t)(base + offset);
 }
+/* Byte-wide window for the M31 eUSB2 PHY. Its registers are not 32-bit
+ * aligned units, so the 32-bit mmio() range check cannot be reused. */
+static volatile uint8_t *mmio8(uint64_t physical)
+{
+    vm_offset_t base = 0;
+    uint64_t offset = 0;
+    if (physical >= QUSB_GCC_BASE && physical - QUSB_GCC_BASE < GCC_BYTES) {
+        base = native.gcc_va; offset = physical - QUSB_GCC_BASE;
+    } else if (physical >= QUSB_DWC3_BASE && physical - QUSB_DWC3_BASE < USB_BYTES) {
+        base = native.usb_va; offset = physical - QUSB_DWC3_BASE;
+    } else if (native.phy_va && physical >= QUD_PHY_BASE &&
+               physical - QUD_PHY_BASE < PHY_MAP_BYTES) {
+        base = native.phy_va; offset = physical - QUD_PHY_BASE;
+    }
+    if (!base) {
+        native.status.io_failed = 1;
+        native.status.error = QCOM_USB_DEBUG_CALLBACK_RANGE_FAILED;
+        return 0;
+    }
+    return (volatile uint8_t *)(uintptr_t)(base + offset);
+}
 static int physical_read(void *cookie, QUSB_U64 address, QUSB_U32 *value)
 {
     volatile uint32_t *p;
@@ -379,6 +400,36 @@ static int prepare_write(void *cookie, QUSB_U64 address, QUSB_U32 value)
         return 0;
     }
     p = mmio(address);
+    if (!p) return 0;
+    barrier(0); *p = value; barrier(0);
+    return 1;
+}
+/* M31 eUSB2 PHY byte accesses. Only the prepare path (GCC/DWC3/PHY windows)
+ * may use these; the normal DMA-capable writer still refuses GCC and the PHY. */
+static int prepare_read8(void *cookie, QUSB_U64 address, uint8_t *value)
+{
+    volatile uint8_t *p;
+    (void)cookie;
+    if (!value || deadline_expired()) { native.status.io_failed = 1; return 0; }
+    p = mmio8(address);
+    if (!p) return 0;
+    barrier(0); *value = *p; barrier(0);
+    return 1;
+}
+static int prepare_write8(void *cookie, QUSB_U64 address, uint8_t value)
+{
+    volatile uint8_t *p;
+    (void)cookie;
+    if (deadline_expired()) { native.status.io_failed = 1; return 0; }
+    if ((address < QUSB_GCC_BASE || address - QUSB_GCC_BASE >= QUD_GCC_BYTES) &&
+        (address < QUSB_DWC3_BASE || address - QUSB_DWC3_BASE >= USB_BYTES) &&
+        !(native.phy_va && address >= QUD_PHY_BASE &&
+          address - QUD_PHY_BASE < PHY_MAP_BYTES)) {
+        native.status.io_failed = 1;
+        native.status.error = QCOM_USB_DEBUG_CALLBACK_RANGE_FAILED;
+        return 0;
+    }
+    p = mmio8(address);
     if (!p) return 0;
     barrier(0); *p = value; barrier(0);
     return 1;
@@ -782,12 +833,16 @@ int qcom_usb_debug_init(void)
     if (!native.gcc_va || !native.usb_va || !native.smmu_va) {
         fail(QCOM_USB_DEBUG_MAP_FAILED, 0); goto out;
     }
-    /* Optional: bring the controller up to device mode first. ABL hands it over
-     * in host mode, so without this the inherited-state gate below refuses. */
-    {
+    diag_checkpoint(QCOM_USB_DEBUG_DIAG_INSPECT);
+    result = QcomUsbInspectInherited(physical_read, 0, &inherited);
+    native.status.qcom_result = (uint32_t)result;
+    if (result != QusbQualified) {
+        /* The boot firmware may have stopped the controller or the M31 PHY.
+         * Try the SM8750 cold start once, then qualify the same state again;
+         * an inherited DEVICE-mode controller is never touched. */
         int prepare = 0;
         (void)PE_parse_boot_argn("qcom-usb-prepare", &prepare, sizeof(prepare));
-        if (prepare == 1) {
+        if (prepare == 1 && QUD_PHY_BASE != 0) {
             QCOM_PREPARE_PLATFORM platform;
             QCOM_PREPARE_RESULT prepared;
             uint32_t stage = 0, readback = 0;
@@ -799,6 +854,8 @@ int qcom_usb_debug_init(void)
             bytes_zero(&platform, sizeof(platform));
             platform.read32 = physical_read;
             platform.write32 = prepare_write;
+            platform.read8 = prepare_read8;
+            platform.write8 = prepare_write8;
             platform.delay_us = delay_us;
             platform.deadline = native.deadline_active ? native.deadline : 0;
             prepared = QcomUsbPrepare(&platform, &stage, &readback);
@@ -808,11 +865,10 @@ int qcom_usb_debug_init(void)
             if (prepared != QPREP_OK) {
                 fail(QCOM_USB_DEBUG_PREPARE_FAILED, (int)prepared); goto out;
             }
+            result = QcomUsbInspectInherited(physical_read, 0, &inherited);
+            native.status.qcom_result = (uint32_t)result;
         }
     }
-    diag_checkpoint(QCOM_USB_DEBUG_DIAG_INSPECT);
-    result = QcomUsbInspectInherited(physical_read, 0, &inherited);
-    native.status.qcom_result = (uint32_t)result;
     if (result != QusbQualified) {
         /* In particular do not wake a clock-gated old DMA engine: the native
          * kernel cannot prove ABL's original DMA buffers are still retained. */
@@ -1561,7 +1617,19 @@ out:
 void qcom_usb_debug_get_status(struct qcom_usb_debug_status *status)
 {
     uint64_t flags;
-    if (!status || !acquire(&flags)) return;
+    if (!status) return;
+    if (!acquire(&flags)) {
+        /* hummer: the worker's wait loop reads this while init may still own
+         * the guard. Returning without a copy left its caller's zeroed struct
+         * in place, so a refused init looked exactly like "never initialised"
+         * (phase=0 error=0). The fields are single-word stores; a diagnostic
+         * snapshot is more useful than silence and is never used to gate DMA.
+         */
+        __asm__ volatile("dsb sy" ::: "memory");
+        bytes_copy(status, &native.status, sizeof(*status));
+        __asm__ volatile("dsb sy" ::: "memory");
+        return;
+    }
     buffer_status_owned();
     bytes_copy(status, &native.status, sizeof(*status)); release(flags);
 }

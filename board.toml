@@ -163,13 +163,15 @@ skip_setup_args = ["--no-auto-dim"]
 kernel_args = [
   "-v", "serial=0", "debug=0x14e", "cpus=6", "kt_fixed_zones=240",
   # USB CDC 调试控制台（M2）。qcom-usb-debug=1 会拉起 worker：它等 USB 控制器
-  # 进 ACTIVE，最多 12000 x 5 ms = 60 秒，超时就 panic 把系统带走。
-  # v222 上机实测：系统已经跑到锁屏（SpringBoard 起来了，xpcproxy/cdpd 都在跑），
-  # 但 worker 报 phase=0 (IDLE) 一直不进 ACTIVE，60 秒后 panic
-  # "QCOM USB WORKER unavailable phase=0 error=0"。
-  # 也就是说 USB 调试通道还没通，而它是硬 panic 而不是可降级的告警。
-  # 先关掉，让系统能稳定停在桌面；等 M31 eUSB2 的 prepare 序列补上再打开。
-  # "qcom-usb-debug=1",
+  # 进 ACTIVE，最多 12000 x 5 ms = 60 秒。
+  # v222 上机实测：worker 报 phase=0 (IDLE) 一直不进 ACTIVE。本轮先修了两个
+  # 让原因不可见的地方：get_status() 在 acquire() 失败时不再返回全零结构，
+  # worker 在 qcom-usb-no-panic=1 下也不再硬 panic，而是记录状态并退出。
+  # 现在打开它 + hummer-usb-panic=1：USB 成功则直接出 COM 口；失败则在 GPU
+  # 启动点 panic，把 ph/er/qr/dr/ds/co/dm 留在屏上（失败才 panic，成功不打断）。
+  # qcom-usb-prepare=1 只在继承态被拒时执行 SM8750 冷启动（M31 eUSB2 序列）；
+  # 继承态本来就合格时不会碰控制器/PHY。
+  "qcom-usb-debug=1", "qcom-usb-no-panic=1", "qcom-usb-prepare=1", "hummer-usb-panic=1",
   # DEVELOPMENT 构建里 disable_kprintf_output 默认是 true：PE_init_kprintf_config
   # 只在显式传 -enable_kprintf_spam 时才把它关掉。没有这个参数，串口只能拿到
   # init 之前那一段，之后（含 worker 和探针报告）全部静音。

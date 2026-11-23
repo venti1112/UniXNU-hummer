@@ -19,15 +19,20 @@
  *   unverified whether this firmware leaves an SMR/S2CR pair for SID 0x40, and
  *              whether it rejects S2CR.TYPE=BYPASS the way the SM8150 firmware
  *              did. The first boot is expected to answer both (dr/ds/bank).
- *   unverified the M31 eUSB2 PHY sequence: QcomUsbPrepare implements the SM8150
- *              femto block at 0x88e2000, while SM8750 has the M31 eUSB2 block at
- *              0x88e3000. QUD_PHY_BASE is therefore left undefined and
- *              qcom-usb-prepare=1 must NOT be used until that sequence exists.
+ *   unverified the M31 eUSB2 PHY sequence: QcomUsbPrepare historically implemented
+ *              the SM8150 femto block at 0x88e2000. SM8750 has the M31 eUSB2 block
+ *              at 0x88e3000; the sequence below is the stock firmware's, taken
+ *              from the same-SoC PianoDwc3 bring-up (Xiaomi Pad 8 Pro).
  */
 #ifndef QUD_SM8750_H
 #define QUD_SM8750_H
 
 #define QUD_SOC_NAME "sm8750-hummer"
+
+/* M31 eUSB2 HS PHY. Registers are byte-wide and replicated across a 32-bit
+ * read; QcomUsbPrepare writes them through the byte callbacks. */
+#define QUD_PHY_BASE 0x088e3000ULL
+#define QUD_PHY_M31 1
 
 /* Development IDs inherited from m1n1, same as the other profiles. */
 #define QUD_USB_VID 0x1209u
@@ -72,13 +77,15 @@
 
 /* Device-mode bring-up would also need the PHY branches (aux 0x39064,
  * com_aux 0x39068, pipe 0x3906c) and the two TCSR clkrefs -- but the SM8750
- * clkrefs live in tcsrcc, not GCC, so they cannot be expressed here yet. Not
- * used while QUD_PHY_BASE is undefined. */
+ * clkrefs live in tcsrcc, not GCC, so they cannot be expressed here yet. The
+ * prepare path assumes the boot firmware left TCSR_USB2_CLKREF_EN set (it ran
+ * USB in fastboot); if the M31 readback fails, that window is the next thing
+ * to add. */
 #define QUD_GCC_CLOCK_OFFSETS {0x39018u, 0x39028u, 0x3902cu, 0x3908cu, 0x39090u, \
                                0x39064u, 0x39068u, 0x3906c}
 #define QUD_GCC_CLOCK_NO_POLL_OFFSETS {0x3906c}
 #define QUD_GCC_QUSB2PHY_BCR_OFFSET 0x12000u   /* GCC_QUSB2PHY_PRIM_BCR */
-#define QUD_GCC_AHB2PHY_BCR_OFFSET 0x12000u    /* not present on SM8750; same block */
+#define QUD_GCC_AHB2PHY_BCR_OFFSET 0u          /* SM8750 has no AHB2PHY reset here */
 #define QUD_GCC_BCR_OFFSET 0x39000u            /* GCC_USB30_PRIM_BCR */
 #define QUD_GCC_GDSCR_OFFSET 0x39004u          /* gcc_usb30_prim_gdsc */
 #define QUD_GCC_CFG_GDSCR_OFFSET 0x39008u      /* gdscr + 4; POLL_CFG_GDSCR set in Linux */
@@ -88,7 +95,11 @@
 #define QUD_GDSC_LEGACY_PWR_ON 0
 
 /* QSCRATCH inside the dwc3 wrapper: the Linux glue maps
- * dwc3_base + 0xf8800 for all of SDM845..SM8750, and HS_PHY_CTRL sits at +0x10. */
+ * dwc3_base + 0xf8800 for all of SDM845..SM8750, and HS_PHY_CTRL sits at +0x10.
+ * GENERAL_CFG +0x8 bit0 selects the UTMI clock as the PIPE clock (PianoDwc3
+ * stage 15); the M31 is HS-only here, so the QMP PIPE clock is not used. */
+#define QUD_QSCRATCH_GENERAL_CFG_OFFSET 0xf8808u
+#define QUD_QSCRATCH_UTMI_CLK_SEL (1u << 0)
 #define QUD_QSCRATCH_HS_PHY_CTRL_OFFSET 0xf8810u
 /* dwc3-qcom sets UTMI_OTG_VBUS_VALID (bit20); bit28 is SM8550-specific. */
 #define QUD_QSCRATCH_VBUS_MASK (1u << 20)

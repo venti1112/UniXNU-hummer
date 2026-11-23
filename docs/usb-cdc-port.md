@@ -25,7 +25,7 @@ OnePlus Ace 5 Pro（hummer / SM8750），让内核日志与 panic 走 USB CDC AC
 | 项 | nabu | hummer | 影响 |
 |---|---|---|---|
 | USB SID | `0x140` | `0x40`（与 engines 的 SM8550 profile 相同） | 只需换 profile 值 |
-| HS PHY | femto `0x088e2000` | **M31 eUSB2 `0x088e3000`** | `QcomUsbPrepare.c` 里的 femto 序列**不能直接用**；本移植先不做 prepare |
+| HS PHY | femto `0x088e2000` | **M31 eUSB2 `0x088e3000`** | `QcomUsbPrepare.c` 在 `QUD_PHY_M31` 下改走 M31 字节序列 |
 | GDSC 状态位 | `GDSCR.PWR_ON` bit31（legacy） | `CFG_GDSCR.POWER_UP_COMPLETE` bit16 | `QUD_GDSC_LEGACY_PWR_ON 0` |
 | clkref | GCC `0x8c008/0x8c028` | tcsrcc 的 `TCSR_USB2/USB3_CLKREF_EN` | GCC 窗口里没有，prepare 需要另开 TCSR 窗口，暂缓 |
 | 启动交接 | ABL 留在 HOST 模式 + halted | 本机是 `fastboot boot` 起 XNU，**USB 应该已经在 DEVICE 模式跑着** | 先试"继承态"路径，可能连 prepare 都不用 |
@@ -58,7 +58,10 @@ OnePlus Ace 5 Pro（hummer / SM8750），让内核日志与 panic 走 USB CDC AC
 - ABL 交给 XNU 时 DWC3 到底在什么模式（fastboot 说明 PHY 在跑，但 SMMU 路由与 core 状态未知）。
 - 这块固件是否也拒绝 `S2CR.TYPE=BYPASS`（SM8150 读过 `0x10003 → 0x20003`）。profile 里
   `QUD_DMA_PREFER_IDENTITY=0`、`QUD_DMA_BYPASS_BANK=0`，等 M1 的 `dr/ds` 再改。
-- `QUD_PHY_BASE` 故意没定义：`qcom-usb-prepare=1` 现在会返回 `QPREP_ARG`，别用。
+- `QUD_PHY_BASE` 现在定义为 `0x88e3000`；`qcom-usb-prepare=1` 只在继承态检查失败时
+  执行 M31 eUSB2 序列（`phy-qcom-m31-eusb2`，序列取自同 SoC 的 PianoDwc3）。TCSR
+  `USB2_CLKREF_EN`、M31 的 vdd/vdda12、PMIC eUSB2 repeater 仍假设由 ABL/UEFI
+  保持供电与使能；读回失败时先查这三项。
 - `QUD_PSCI_SMC_RESET=0`：hummer 的 SMC SYSTEM_RESET 没验证过，控制通道的重启会回 `nohook`。
 
 ## 模块来源

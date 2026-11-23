@@ -28,9 +28,11 @@
 #include <libkern/c++/OSSymbol.h>
 #include <libkern/libkern.h>
 #include <kern/clock.h>
+#include <kern/debug.h>
 #include <mach/kmod.h>
 #include <kern/task.h>
 #include <pexpert/pexpert.h>
+#include "QcomXnuUsbDebug.h"
 #include "ArmSmmu4KMmio.h"
 #include "NativeAdrenoGpuContext.h"
 #include "NativeAdrenoA830HwInit.h"
@@ -456,6 +458,23 @@ extern "C" int hummer_gpu_start() {
     uint32_t enabled=0;
     if(!PE_parse_boot_argn("hummer-adreno-bringup",&enabled,sizeof(enabled)) || !enabled)
         return kIOReturnUnsupported;
+    /* hummer-usb-panic=1: without a working USB CDC console the only surface
+     * left is the panic screen. This runs after PE_init_kprintf (where the USB
+     * module's one-shot init happens), so it can report the exact init stage.
+     * Once the console is ACTIVE it stays out of the way: the log itself is
+     * then the answer, and the desktop must not be taken down for a probe. */
+    {
+        uint32_t usb_panic=0;
+        if(PE_parse_boot_argn("hummer-usb-panic",&usb_panic,sizeof(usb_panic)) && usb_panic==1) {
+            qcom_usb_debug_status usb{};
+            qcom_usb_debug_get_status(&usb);
+            if(usb.phase!=QCOM_USB_DEBUG_ACTIVE)
+                panic("HUMUSB ph=%u er=%u qr=%u dr=%u ds=%u co=%d dm=%u pp=%u ps=%u pr=%x av=%u ad=%u",
+                    usb.phase,usb.error,usb.qcom_result,usb.domain_result,usb.domain_stage,
+                    usb.core_result,usb.dma_mode,usb.prepare_result,usb.prepare_stage,
+                    (unsigned)usb.prepare_readback,usb.dma_lease_active,usb.dma_address_width);
+        }
+    }
     g.attempted=true;
     int rc=start();
     if(rc) {boot_progress_display_status(current_stage,uint32_t(rc));IOLog("hummer GPU stopped at %s: %d\n",current_stage,rc);}

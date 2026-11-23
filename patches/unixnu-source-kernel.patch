@@ -4259,10 +4259,10 @@ index 0000000..5a70705
 + 
 diff --git a/patches/xnu/zzzzzzzz-usb-cdc-worker.patch b/patches/xnu/zzzzzzzz-usb-cdc-worker.patch
 new file mode 100644
-index 0000000..eaa716e
+index 0000000..e9e2746
 --- /dev/null
 +++ b/patches/xnu/zzzzzzzz-usb-cdc-worker.patch
-@@ -0,0 +1,259 @@
+@@ -0,0 +1,272 @@
 +diff --git a/bsd/kern/bsd_init.c b/bsd/kern/bsd_init.c
 +index 23805ea..1e67c8a 100644
 +--- a/bsd/kern/bsd_init.c
@@ -4280,7 +4280,7 @@ index 0000000..eaa716e
 + 
 + #if (DEVELOPMENT || DEBUG)
 + #include <kern/debug.h>
-+@@ -1296,11 +1302,241 @@ bsdinit_task(void)
++@@ -1296,11 +1302,254 @@ bsdinit_task(void)
 + 	lock_trace = 1;
 + }
 + 
@@ -4440,6 +4440,19 @@ index 0000000..eaa716e
 ++			}
 ++		}
 ++		if (status.phase != QCOM_USB_DEBUG_ACTIVE) {
+++			uint32_t usb_no_panic = 0;
+++			(void)PE_parse_boot_argn("qcom-usb-no-panic", &usb_no_panic,
+++			    sizeof(usb_no_panic));
+++			if (usb_no_panic == 1) {
+++				kprintf("QCOM USB WORKER unavailable phase=%u error=%u "
+++				    "qr=%u dr=%u ds=%u co=%d dm=%u\n",
+++				    status.phase, status.error, status.qcom_result,
+++				    status.domain_result, status.domain_stage,
+++				    status.core_result, status.dma_mode);
+++				__atomic_store_n(&qcom_usb_worker_state, 4u,
+++				    __ATOMIC_RELEASE);
+++				thread_terminate_self();
+++			}
 ++			panic("QCOM USB WORKER unavailable phase=%u error=%u",
 ++			    status.phase, status.error);
 ++		}
