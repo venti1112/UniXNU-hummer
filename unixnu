@@ -34,6 +34,10 @@ def prepare(device=DEVICE, source=None):
         # frontend speaks. It replaces the three small patches this board used
         # while the driver was still being retargeted by hand.
         ('adreno-a830.patch', 'NativeAdreno'),
+        # The macOS host simulation (check-turnip-darwin-host.py) compiles the
+        # user client without the iOS-only sys/resource_private.h; the GPU-role
+        # path is already guarded by PRIO_DARWIN_GPU_*, so guard the include too.
+        ('adreno-a830-host.patch', 'NativeAdreno'),
         # M9 display hand-off: a BO imported from the presenter's writable
         # scanout (memory type 0x5343) is built from the scanout's own physical
         # range instead of being wired as user pages (it lies outside the XNU

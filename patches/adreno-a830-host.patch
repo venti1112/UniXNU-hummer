@@ -1,0 +1,14 @@
+diff --git a/NativeAdrenoUserClient.cpp b/NativeAdrenoUserClient.cpp
+index 71a7abb..d694a99 100644
+--- a/NativeAdrenoUserClient.cpp
++++ b/NativeAdrenoUserClient.cpp
+@@ -1,7 +1,9 @@
+ /* SPDX-License-Identifier: MIT */
+ #include "NativeAdrenoUserClient.h"
+ #include <kern/task.h>
++#if __has_include(<sys/resource_private.h>)
+ #include <sys/resource_private.h>   /* PRIO_DARWIN_GPU_*: the process's GPU role, set by the system */
++#endif
+ static int32_t currentGpuRole()
+ {
+ #if defined(PRIO_DARWIN_GPU_BACKGROUND) && defined(PRIO_DARWIN_GPU_UTILITY)
