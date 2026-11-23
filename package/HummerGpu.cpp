@@ -467,7 +467,19 @@ extern "C" int hummer_gpu_start() {
         uint32_t usb_panic=0;
         if(PE_parse_boot_argn("hummer-usb-panic",&usb_panic,sizeof(usb_panic)) && usb_panic==1) {
             qcom_usb_debug_status usb{};
+            /* PE_init_kprintf returns early when boot_progress_active() owns
+             * PE_kputc (the panel console), so the USB module's one-shot init
+             * never ran there. bsd_autoconf already has ml_io_map and IOKit,
+             * and is early enough for the GPU bring-up: initialise it here.
+             * The retries only cover losing the module's guard to the worker's
+             * first status poll; a refused init keeps its phase and stops. */
+            (void)qcom_usb_debug_init();
             qcom_usb_debug_get_status(&usb);
+            for(unsigned retry=0;retry<8 && usb.phase==QCOM_USB_DEBUG_NOT_INITIALIZED;++retry) {
+                IODelay(1000);
+                (void)qcom_usb_debug_init();
+                qcom_usb_debug_get_status(&usb);
+            }
             if(usb.phase!=QCOM_USB_DEBUG_ACTIVE)
                 panic("HUMUSB ph=%u er=%u qr=%u dr=%u ds=%u co=%d dm=%u pp=%u ps=%u pr=%x av=%u ad=%u",
                     usb.phase,usb.error,usb.qcom_result,usb.domain_result,usb.domain_stage,
