@@ -311,6 +311,35 @@ static void panic_halt(void)
 #endif
 }
 
+/* Set an upper bound on how long the panic text stays on the panel before the
+ * reset attempt. CNTVCT is already used by this file for the stage ages. */
+static void panic_delay_seconds(unsigned seconds)
+{
+    uint64_t hz = frequency(), start = counter(), ticks;
+    if (!hz || seconds > 30) return;
+    ticks = hz * seconds;
+    while (counter() - start < ticks) __asm__ volatile("yield" ::: "memory");
+}
+
+/* hummer's /psci node says method = "smc" (verified in the board DTB).
+ * PSCI SYSTEM_RESET returns only when the monitor refuses it; the caller
+ * then leaves the force-reboot footer instead of reporting a reset that
+ * never happened. */
+static void panic_reset(void)
+{
+#ifndef BOOT_PROGRESS_TEST
+    register uint64_t x0 __asm__("x0") = 0x84000009ULL;   /* SYSTEM_RESET */
+    register uint64_t x1 __asm__("x1") = 0;
+    register uint64_t x2 __asm__("x2") = 0;
+    register uint64_t x3 __asm__("x3") = 0;
+    __asm__ volatile("dsb sy\n\tsmc #0"
+                     : "+r"(x0)
+                     : "r"(x1), "r"(x2), "r"(x3)
+                     : "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
+                       "x12", "x13", "x14", "x15", "x16", "x17", "memory");
+#endif
+}
+
 static void panic_open(const char *title)
 {
     panic_state = 1; busy = 1; panic_clipped = 0;
@@ -391,7 +420,11 @@ void boot_progress_panic(const char *format, va_list *args, unsigned long caller
     for (unsigned i = stage_count - count; i < stage_count; i++) {
         text_raw(stages[i % HISTORY]); putc_raw('\n');
     }
-    panic_footer("HALTED: no software reboot"); panic_halt();
+    panic_footer("HALTED: rebooting via PSCI SYSTEM_RESET (5 s)");
+    panic_delay_seconds(5);
+    panic_reset();
+    panic_footer("PSCI SYSTEM_RESET returned; halted (force reboot)");
+    panic_halt();
 }
 
 // No kernel services, stack protector, SIMD, or relocated pointers on this path.
