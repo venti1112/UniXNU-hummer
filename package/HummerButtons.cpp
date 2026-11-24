@@ -215,6 +215,16 @@ void buttonsThread(void *, wait_result_t) {
 
 }  // namespace
 
+// Panic-path power-key probe: BootProgress calls this with interrupts masked.
+// It only reads the PMK8550 PON real-time status through the mapping setup()
+// already made; no allocation, no IOKit, no interrupt. -1 = not mapped yet.
+extern "C" int hummer_power_key_down(void) {
+    uint8_t pon = 0;
+    if (!gObs.va || gPon < 0) return -1;
+    if (br_read8(gObs.va, &gArb, gPon, kRtSts, &pon)) return -1;
+    return (pon & kPowerBit) ? 1 : 0;
+}
+
 // Called by drivers/NativeHidInput once its device is started (weak import there, so a build
 // without this file still links).
 extern "C" void native_buttons_set_sink(void (*sink)(void *, uint32_t), void *context) {

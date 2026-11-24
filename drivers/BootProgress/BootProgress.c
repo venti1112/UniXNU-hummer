@@ -30,6 +30,10 @@ extern volatile int native_owner_cache_stage __attribute__((weak));
 extern volatile uint64_t native_ufs_block_reads __attribute__((weak));
 extern volatile uint64_t native_ufs_block_failures __attribute__((weak));
 extern volatile int native_ufs_root_step __attribute__((weak));
+/* HummerButtons.cpp exports this; weak so a build without the touch archive
+ * still links. It reads the PMK8550 PON RT_STS through a mapping made before
+ * the panic, with no allocation or interrupt. -1 = not mapped yet. */
+extern int hummer_power_key_down(void) __attribute__((weak));
 extern unsigned vm_page_free_count;
 extern uint32_t memorystatus_available_pages;
 
@@ -311,13 +315,13 @@ static void panic_halt(void)
 #endif
 }
 
-/* Set an upper bound on how long the panic text stays on the panel before the
- * reset attempt. CNTVCT is already used by this file for the stage ages. */
-static void panic_delay_seconds(unsigned seconds)
+/* Short bounded wait for the panic power-key poll. CNTVCT is already used by
+ * this file for the stage ages. */
+static void panic_delay_ms(unsigned ms)
 {
     uint64_t hz = frequency(), start = counter(), ticks;
-    if (!hz || seconds > 30) return;
-    ticks = hz * seconds;
+    if (!hz || ms > 1000) return;
+    ticks = hz * ms / 1000u;
     while (counter() - start < ticks) __asm__ volatile("yield" ::: "memory");
 }
 
@@ -420,10 +424,16 @@ void boot_progress_panic(const char *format, va_list *args, unsigned long caller
     for (unsigned i = stage_count - count; i < stage_count; i++) {
         text_raw(stages[i % HISTORY]); putc_raw('\n');
     }
-    panic_footer("HALTED: rebooting via PSCI SYSTEM_RESET (5 s)");
-    panic_delay_seconds(5);
-    panic_reset();
-    panic_footer("PSCI SYSTEM_RESET returned; halted (force reboot)");
+    panic_footer("HALTED: press POWER to reboot (PSCI SYSTEM_RESET)");
+    for (;;) {
+        if (hummer_power_key_down && hummer_power_key_down() == 1) {
+            panic_footer("rebooting via PSCI SYSTEM_RESET");
+            panic_reset();
+            panic_footer("PSCI SYSTEM_RESET returned; halted (force reboot)");
+            break;
+        }
+        panic_delay_ms(20);
+    }
     panic_halt();
 }
 
