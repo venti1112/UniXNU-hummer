@@ -424,10 +424,12 @@ static int device_event(struct dwc3 *d, unsigned event)
             speed != DWC3_DSTS_FULLSPEED2) return -6;
         d->full_speed = speed != DWC3_DSTS_HIGHSPEED;
         d->packet_size = d->full_speed ? 64 : 512;
-        if (configure_ep(d, 0, DWC3_DEPCMD_TYPE_CONTROL, 64, 1) ||
-            configure_ep(d, 1, DWC3_DEPCMD_TYPE_CONTROL, 64, 1) ||
-            configure_ep(d, EP_IN, DWC3_DEPCMD_TYPE_BULK, d->packet_size, 1) ||
-            configure_ep(d, EP_OUT, DWC3_DEPCMD_TYPE_BULK, d->packet_size, 1)) return -4;
+        /* Do not re-issue SETEPCONFIG here. On DWC_usb31/32 the MODIFY action
+         * invalidates the endpoint's transfer resource; the first
+         * STARTTRANSFER on EP0 then returns DEPCMD status 1 ("No Resource",
+         * 0x1006), which is exactly what hummer's panic showed. The endpoints
+         * were configured with HS sizes in dwc3_init; Linux also does not
+         * reconfigure them from its CONNECTDONE interrupt. */
         return setup_phase(d);
     }
     if (event == DWC3_DEVT_EVNTOVERFLOW || event == DWC3_DEVT_ERRTICERR) return -7;
