@@ -211,6 +211,13 @@ typedef uint32_t u32;
 #define DWC3_DCFG_DEVADDR(addr) ((addr) << 3)
 #define DWC3_DCFG_DEVADDR_MASK  DWC3_DCFG_DEVADDR(0x7f)
 
+/* RxFIFO buffers available to the core (DCFG.NUMP). The SM8750 core leaves it
+ * at 0 after a firmware hand-off; STARTTRANSFER on EP0 then returns status 1
+ * ("No Resource") because no Rx buffer can be assigned to the SETUP packet. */
+#define DWC3_DCFG_NUMP_SHIFT    17
+#define DWC3_DCFG_NUMP(n)       (((n) & 0x1fu) << DWC3_DCFG_NUMP_SHIFT)
+#define DWC3_DCFG_NUMP_MASK     (0x1fu << DWC3_DCFG_NUMP_SHIFT)
+
 #define DWC3_DCFG_SPEED_MASK (7u << 0)
 #define DWC3_DCFG_SUPERSPEED (4u << 0)
 #define DWC3_DCFG_HIGHSPEED  (0u << 0)

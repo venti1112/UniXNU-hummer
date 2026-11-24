@@ -204,18 +204,20 @@ static int end_noncontrol(struct dwc3 *d)
     return 0;
 }
 static int configure_ep(struct dwc3 *d, unsigned ep, unsigned type,
-                        unsigned packet, int modify)
+                        unsigned packet, uint32_t action)
 {
-    uint32_t p0 = DWC3_DEPCFG_EP_TYPE(type) | DWC3_DEPCFG_MAX_PACKET_SIZE(packet);
-    uint32_t p1 = DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_XFER_NOT_READY_EN |
-                  DWC3_DEPCFG_EP_NUMBER(ep);
+    uint32_t p0 = DWC3_DEPCFG_EP_TYPE(type) | DWC3_DEPCFG_MAX_PACKET_SIZE(packet) |
+                  action;
+    uint32_t p1 = DWC3_DEPCFG_XFER_COMPLETE_EN | DWC3_DEPCFG_EP_NUMBER(ep);
     /* FIFO number is the USB IN endpoint number, not physical endpoint index. */
     if (ep & 1u) p0 |= DWC3_DEPCFG_FIFO_NUMBER(ep >> 1);
+    if (type == DWC3_DEPCMD_TYPE_CONTROL) p1 |= DWC3_DEPCFG_XFER_NOT_READY_EN;
     if (type == DWC3_DEPCMD_TYPE_INTR) p1 |= DWC3_DEPCFG_BINTERVAL_M1(9);
-    if (modify) p0 |= CONFIG_ACTION_MODIFY;
-    if (ep_command(d, ep, DWC3_DEPCMD_SETEPCONFIG, p0, p1, 0)) return -4;
-    if (!modify && ep_command(d, ep, DWC3_DEPCMD_SETTRANSFRESOURCE, 1, 0, 0)) return -4;
-    return 0;
+    return ep_command(d, ep, DWC3_DEPCMD_SETEPCONFIG, p0, p1, 0) ? -4 : 0;
+}
+static int allocate_ep(struct dwc3 *d, unsigned ep)
+{
+    return ep_command(d, ep, DWC3_DEPCMD_SETTRANSFRESOURCE, 1, 0, 0) ? -4 : 0;
 }
 static int transfer(struct dwc3 *d, unsigned ep, uint32_t type, unsigned bytes)
 {
@@ -276,6 +278,13 @@ static int set_configuration(struct dwc3 *d, unsigned value)
 {
     if (value > 1) return -1;
     if (d->configured && end_noncontrol(d)) return -4;
+    if (value) {
+        /* Resources were allocated at init; only now does the host allow these
+         * endpoints to be configured (PianoDwc3's SET_CONFIGURATION order). */
+        if (configure_ep(d, EP_NOTIFY, DWC3_DEPCMD_TYPE_INTR, 16, 0) ||
+            configure_ep(d, EP_OUT, DWC3_DEPCMD_TYPE_BULK, d->packet_size, 0) ||
+            configure_ep(d, EP_IN, DWC3_DEPCMD_TYPE_BULK, d->packet_size, 0)) return -4;
+    }
     d->configured = (uint8_t)value;
     d->dtr = 0;
     wr(d, DWC3_DALEPENA, 3u | (value ? ((1u << EP_NOTIFY) | (1u << EP_OUT) |
@@ -424,12 +433,12 @@ static int device_event(struct dwc3 *d, unsigned event)
             speed != DWC3_DSTS_FULLSPEED2) return -6;
         d->full_speed = speed != DWC3_DSTS_HIGHSPEED;
         d->packet_size = d->full_speed ? 64 : 512;
-        /* Do not re-issue SETEPCONFIG here. On DWC_usb31/32 the MODIFY action
-         * invalidates the endpoint's transfer resource; the first
-         * STARTTRANSFER on EP0 then returns DEPCMD status 1 ("No Resource",
-         * 0x1006), which is exactly what hummer's panic showed. The endpoints
-         * were configured with HS sizes in dwc3_init; Linux also does not
-         * reconfigure them from its CONNECTDONE interrupt. */
+        /* Only the two control endpoints are re-configured here (PianoDwc3's
+         * CONNECTDONE order). The bulk/notify endpoints stay unconfigured until
+         * SET_CONFIGURATION, so their SETEPCONFIG cannot consume the Rx buffer
+         * that EP0's first SETUP needs. */
+        if (configure_ep(d, 0, DWC3_DEPCMD_TYPE_CONTROL, 64, CONFIG_ACTION_MODIFY) ||
+            configure_ep(d, 1, DWC3_DEPCMD_TYPE_CONTROL, 64, CONFIG_ACTION_MODIFY)) return -4;
         return setup_phase(d);
     }
     if (event == DWC3_DEVT_EVNTOVERFLOW || event == DWC3_DEVT_ERRTICERR) return -7;
@@ -547,7 +556,8 @@ int dwc3_init(void *context, size_t context_bytes,
     wr(d, DWC3_GCTL, (rd(d, DWC3_GCTL) & ~(DWC3_GCTL_PRTCAPDIR(3) |
          DWC3_GCTL_GBLHIBERNATIONEN)) | DWC3_GCTL_PRTCAPDIR(DWC3_GCTL_PRTCAP_DEVICE));
     wr(d, DWC3_DCFG, (rd(d, DWC3_DCFG) & ~(DWC3_DCFG_SPEED_MASK | DWC3_DCFG_DEVADDR_MASK |
-         DWC3_DCFG_LPM_CAP)) | DWC3_DCFG_HIGHSPEED);
+         DWC3_DCFG_LPM_CAP | DWC3_DCFG_NUMP_MASK)) |
+         DWC3_DCFG_HIGHSPEED | DWC3_DCFG_NUMP(16));
     wr(d, DWC3_GEVNTADRLO(0), (uint32_t)dma_device);
     wr(d, DWC3_GEVNTADRHI(0), (uint32_t)(dma_device >> 32));
     /* Mask the event IRQ; status still accumulates for polling. */
@@ -556,12 +566,15 @@ int dwc3_init(void *context, size_t context_bytes,
     wr(d, DWC3_DEVTEN, DWC3_DEVTEN_DISCONNEVTEN | DWC3_DEVTEN_USBRSTEN |
          DWC3_DEVTEN_CONNECTDONEEN | DWC3_DEVTEN_EVNTOVERFLOWEN | DWC3_DEVTEN_ERRTICERREN);
     if (ep_command(d, 0, DWC3_DEPCMD_DEPSTARTCFG, 0, 0, 0)) goto fail;
+    /* Control endpoints are configured now. The other endpoints only get a
+     * transfer resource: their SETEPCONFIG waits for SET_CONFIGURATION, so an
+     * OUT endpoint cannot hold the Rx buffer that EP0's SETUP needs. */
     for (ep = 0; ep < EP_COUNT; ep++) {
         if (ep == 2) continue;
-        unsigned type = ep < 2 ? DWC3_DEPCMD_TYPE_CONTROL :
-                        ep == EP_NOTIFY ? DWC3_DEPCMD_TYPE_INTR : DWC3_DEPCMD_TYPE_BULK;
-        unsigned mps = ep < 2 ? 64 : ep == EP_NOTIFY ? 16 : 512;
-        if (configure_ep(d, ep, type, mps, 0)) goto fail;
+        if (ep < 2) {
+            if (configure_ep(d, ep, DWC3_DEPCMD_TYPE_CONTROL, 64, 0)) goto fail;
+        }
+        if (allocate_ep(d, ep)) goto fail;
     }
     wr(d, DWC3_DALEPENA, 3);
     d->initialized = 1;
