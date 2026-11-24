@@ -1040,6 +1040,8 @@ int qcom_usb_debug_init(void)
         fail(QCOM_USB_DEBUG_CORE_INIT_FAILED, ret); (void)restore_after_failure(); ret = 0; goto out;
     }
     native.core_initialized = 1;
+    native.status.nump = dwc3_nump(native.core);
+    native.status.ep0_resource = dwc3_ep0_resource(native.core);
     {
         static const char banner[] = "QCOM XNU USB CDC ACM v1\n";
         (void)backlog_write(banner, sizeof(banner) - 1);

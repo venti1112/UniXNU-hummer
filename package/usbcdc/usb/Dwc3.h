@@ -49,6 +49,10 @@ struct dwc3_platform {
 
 struct dwc3;
 size_t dwc3_context_bytes(void);
+/* DCFG.NUMP that dwc3_init programmed (RxFIFO buffers). */
+uint32_t dwc3_nump(const struct dwc3 *dev);
+/* Transfer resource index reported for EP0 (SETTRANSFRESOURCE); diagnostic. */
+uint32_t dwc3_ep0_resource(const struct dwc3 *dev);
 /* Platform must have already established device role, PHY/clocks, power and
  * SMMU mapping. This resets only the DWC device side; it never initializes PHY.
  * Buffers must remain mapped at the same CPU/DMA addresses for this instance.

@@ -93,6 +93,10 @@ typedef struct qcom_usb_debug_status {
     uint32_t control_enabled, control_hook_owned, control_reboot_state, control_rejected;
     /* qcom-usb-prepare=1 only: how far the device-mode bring-up got. */
     uint32_t prepare_result, prepare_stage, prepare_readback;
+    /* DCFG.NUMP programmed by dwc3_init (0 = not initialised). */
+    uint32_t nump;
+    /* EP0 transfer-resource index returned by SETTRANSFRESOURCE. */
+    uint32_t ep0_resource;
 } qcom_usb_debug_status;
 
 #ifdef __cplusplus

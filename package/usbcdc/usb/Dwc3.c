@@ -27,6 +27,7 @@ struct dwc3 {
     struct dwc3_platform io;
     uint8_t *dma_cpu;
     uint64_t dma_device;
+    uint32_t nump;
     uint32_t event_offset, tx_head, tx_tail, tx_used, in_length;
     uint32_t rx_head, rx_tail, rx_used, rx_generation;
     uint64_t rx_overflow;
@@ -181,7 +182,8 @@ static int ep_command(struct dwc3 *d, unsigned ep, uint32_t cmd,
         trace(d, DWC3_TRACE_COMMAND, (ep << 16) | cmd, result);
         ret = -4; goto out;
     }
-    if ((cmd & 15u) == DWC3_DEPCMD_STARTTRANSFER)
+    if ((cmd & 15u) == DWC3_DEPCMD_STARTTRANSFER ||
+        (cmd & 15u) == DWC3_DEPCMD_SETTRANSFRESOURCE)
         d->resource[ep] = DWC3_DEPCMD_GET_RSC_IDX(result);
 out:
     if (phy & suspend) wr(d, DWC3_GUSB2PHYCFG(0), phy);
@@ -487,6 +489,8 @@ static int handle_event(struct dwc3 *d, uint32_t event)
 }
 
 size_t dwc3_context_bytes(void) { return sizeof(struct dwc3); }
+uint32_t dwc3_nump(const struct dwc3 *d) { return d ? d->nump : 0; }
+uint32_t dwc3_ep0_resource(const struct dwc3 *d) { return d ? d->resource[0] : 0; }
 int dwc3_init(void *context, size_t context_bytes,
                   const struct dwc3_platform *platform,
                   const struct dwc3_identity *identity,
@@ -494,7 +498,7 @@ int dwc3_init(void *context, size_t context_bytes,
 {
     struct dwc3 *d = context;
     unsigned ep, interrupts, total_eps, in_eps;
-    uint32_t id, params;
+    uint32_t id, params, params0, params7, mdwidth, ram2, nump;
     size_t manufacturer_chars, product_chars, serial_chars;
     if (!context || ((uintptr_t)context & 7u) || context_bytes < sizeof(*d) ||
         !platform || !platform->read32 || !platform->write32 || !platform->delay_us ||
@@ -555,9 +559,24 @@ int dwc3_init(void *context, size_t context_bytes,
     sync(d, dma_cpu, DWC3_DMA_BYTES, DWC3_TO_DEVICE);
     wr(d, DWC3_GCTL, (rd(d, DWC3_GCTL) & ~(DWC3_GCTL_PRTCAPDIR(3) |
          DWC3_GCTL_GBLHIBERNATIONEN)) | DWC3_GCTL_PRTCAPDIR(DWC3_GCTL_PRTCAP_DEVICE));
+    /* Linux dwc3_gadget_setup_nump: NUMP is derived from the RxFIFO depth,
+     * not a fixed value. A value larger than the FIFO supports leaves EP0
+     * without an Rx buffer and STARTTRANSFER returns "No Resource". */
+    params0 = rd(d, DWC3_GHWPARAMS0);
+    params7 = rd(d, DWC3_GHWPARAMS7);
+    mdwidth = (params0 >> 8) & 0xffu;          /* GHWPARAMS0.MDWIDTH, bits */
+    ram2 = (params7 >> 16) & 0xffffu;          /* GHWPARAMS7.RAM2_DEPTH */
+    nump = 0;
+    if (mdwidth && ram2) {
+        uint32_t rx_bytes = (ram2 * mdwidth) / 8u;
+        if (rx_bytes > 40u) nump = (rx_bytes - 40u) / 1024u;
+    }
+    if (nump > 16u) nump = 16u;
+    if (!nump) nump = 1u;
+    d->nump = nump;
     wr(d, DWC3_DCFG, (rd(d, DWC3_DCFG) & ~(DWC3_DCFG_SPEED_MASK | DWC3_DCFG_DEVADDR_MASK |
          DWC3_DCFG_LPM_CAP | DWC3_DCFG_NUMP_MASK)) |
-         DWC3_DCFG_HIGHSPEED | DWC3_DCFG_NUMP(16));
+         DWC3_DCFG_HIGHSPEED | DWC3_DCFG_NUMP(nump));
     wr(d, DWC3_GEVNTADRLO(0), (uint32_t)dma_device);
     wr(d, DWC3_GEVNTADRHI(0), (uint32_t)(dma_device >> 32));
     /* Mask the event IRQ; status still accumulates for polling. */
