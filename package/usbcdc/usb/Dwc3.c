@@ -152,12 +152,18 @@ static int ep_command(struct dwc3 *d, unsigned ep, uint32_t cmd,
 {
     uint32_t result;
     uint32_t phy = rd(d, DWC3_GUSB2PHYCFG(0));
+    uint32_t pipe = rd(d, DWC3_GUSB3PIPECTL(0));
     uint32_t suspend = DWC3_GUSB2PHYCFG_SUSPHY | (1u << 8); /* ENBLSLPM */
     int ret = 0;
     d->commands++;
     /* DWC_usb31 1.90a guide 3.2.2, also Linux dwc3_send_gadget_ep_cmd:
-     * HS/FS endpoint commands require both PHY suspend controls disabled. */
+     * HS/FS endpoint commands require both PHY suspend controls disabled.
+     * The SM8750 board profile (PianoDwc3) also clears the USB3 PIPE suspend
+     * around every command; the firmware may leave it set even though this
+     * port only uses the HS lanes, and the command engine then times out. */
     if (phy & suspend) wr(d, DWC3_GUSB2PHYCFG(0), phy & ~suspend);
+    if (pipe & DWC3_GUSB3PIPECTL_SUSPHY)
+        wr(d, DWC3_GUSB3PIPECTL(0), pipe & ~DWC3_GUSB3PIPECTL_SUSPHY);
     wr(d, DWC3_DEPCMDPAR0(ep), p0);
     wr(d, DWC3_DEPCMDPAR1(ep), p1);
     wr(d, DWC3_DEPCMDPAR2(ep), p2);
@@ -179,6 +185,7 @@ static int ep_command(struct dwc3 *d, unsigned ep, uint32_t cmd,
         d->resource[ep] = DWC3_DEPCMD_GET_RSC_IDX(result);
 out:
     if (phy & suspend) wr(d, DWC3_GUSB2PHYCFG(0), phy);
+    if (pipe & DWC3_GUSB3PIPECTL_SUSPHY) wr(d, DWC3_GUSB3PIPECTL(0), pipe);
     return ret;
 }
 static int end_transfer(struct dwc3 *d, unsigned ep)
@@ -515,6 +522,13 @@ int dwc3_init(void *context, size_t context_bytes,
     if (!interrupts || interrupts > 32) return -2;
     wr(d, DWC3_DCTL, rd(d, DWC3_DCTL) & ~DWC3_DCTL_RUN_STOP);
     if (wait_mask(d, DWC3_DSTS, DWC3_DSTS_DEVCTRLHLT, DWC3_DSTS_DEVCTRLHLT)) return -3;
+    /* HS-only port: release the HS PHY suspend/LPM controls and keep the SS
+     * pipe suspended before the core soft reset (PianoDwc3's takeover order;
+     * the firmware may leave either state from its own fastboot gadget). */
+    wr(d, DWC3_GUSB2PHYCFG(0),
+       rd(d, DWC3_GUSB2PHYCFG(0)) & ~(DWC3_GUSB2PHYCFG_SUSPHY | (1u << 8)));
+    wr(d, DWC3_GUSB3PIPECTL(0),
+       rd(d, DWC3_GUSB3PIPECTL(0)) | DWC3_GUSB3PIPECTL_SUSPHY);
     wr(d, DWC3_DCTL, rd(d, DWC3_DCTL) | DWC3_DCTL_CSFTRST);
     if (wait_mask(d, DWC3_DCTL, DWC3_DCTL_CSFTRST, 0)) return -3;
     wr(d, DWC3_DEVTEN, 0); wr(d, DWC3_DALEPENA, 0);
