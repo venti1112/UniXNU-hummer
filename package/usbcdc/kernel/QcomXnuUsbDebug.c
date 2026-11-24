@@ -278,8 +278,11 @@ static void loss_notice_owned(void)
     if (DWC3_TX_BYTES - dwc3_queued(native.core) >= bytes &&
         dwc3_queue(native.core, text, bytes) == bytes) usb_log_loss_reported = dropped;
 }
+static void fail(unsigned int error, int core_result);
+static void capture_core_diag(void);
 static void fail(unsigned int error, int core_result)
 {
+    capture_core_diag();
     native.status.error = error;
     native.status.core_result = core_result;
     native.status.phase = QCOM_USB_DEBUG_REFUSED;
@@ -342,6 +345,19 @@ static int physical_read(void *cookie, QUSB_U64 address, QUSB_U32 *value)
     if (!p) return 0;
     barrier(0); *value = *p; barrier(0);
     return 1;
+}
+/* Called from fail(): the core is still clocked here, so capture what the
+ * STARTTRANSFER could not use (resource index, TRB, DCFG, link state). */
+static void capture_core_diag(void)
+{
+    QUSB_U32 value;
+    if (!native.core_initialized) return;
+    native.status.ep0_resource_now = dwc3_ep0_resource(native.core);
+    native.status.trb_dma = dwc3_last_trb_dma(native.core);
+    native.status.trb_ctrl = dwc3_last_trb_ctrl(native.core);
+    native.status.trb_size = dwc3_last_trb_size(native.core);
+    if (physical_read(0, QUSB_DWC3_BASE + 0xc700, &value)) native.status.dcfg = value;
+    if (physical_read(0, QUSB_DWC3_BASE + 0xc70c, &value)) native.status.dsts = value;
 }
 static int physical_write(void *cookie, QUSB_U64 address, QUSB_U32 value)
 {

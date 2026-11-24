@@ -97,6 +97,11 @@ typedef struct qcom_usb_debug_status {
     uint32_t nump;
     /* EP0 transfer-resource index returned by SETTRANSFRESOURCE. */
     uint32_t ep0_resource;
+    /* Failure-time diagnostics: current EP0 resource, last TRB, DCFG, DSTS. */
+    uint32_t ep0_resource_now;
+    uint32_t trb_ctrl, trb_size;
+    uint64_t trb_dma;
+    uint32_t dcfg, dsts;
 } qcom_usb_debug_status;
 
 #ifdef __cplusplus

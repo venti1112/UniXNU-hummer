@@ -27,6 +27,8 @@ struct dwc3 {
     struct dwc3_platform io;
     uint8_t *dma_cpu;
     uint64_t dma_device;
+    uint64_t last_trb_dma;
+    uint32_t last_trb_ctrl, last_trb_size;
     uint32_t nump;
     uint32_t event_offset, tx_head, tx_tail, tx_used, in_length;
     uint32_t rx_head, rx_tail, rx_used, rx_generation;
@@ -234,6 +236,9 @@ static int transfer(struct dwc3 *d, unsigned ep, uint32_t type, unsigned bytes)
               DWC3_TRB_CTRL_ISP_IMI | DWC3_TRB_CTRL_IOC;
     sync(d, buffer(d, ep), EP_BUFFER_BYTES, DWC3_TO_DEVICE);
     sync(d, t, 64, DWC3_TO_DEVICE);
+    d->last_trb_dma = trb_dma;
+    d->last_trb_ctrl = t->ctrl;
+    d->last_trb_size = t->size;
     if (ep_command(d, ep, DWC3_DEPCMD_STARTTRANSFER,
                    (uint32_t)(trb_dma >> 32), (uint32_t)trb_dma, 0)) return -4;
     d->active[ep] = 1;
@@ -491,6 +496,9 @@ static int handle_event(struct dwc3 *d, uint32_t event)
 size_t dwc3_context_bytes(void) { return sizeof(struct dwc3); }
 uint32_t dwc3_nump(const struct dwc3 *d) { return d ? d->nump : 0; }
 uint32_t dwc3_ep0_resource(const struct dwc3 *d) { return d ? d->resource[0] : 0; }
+uint64_t dwc3_last_trb_dma(const struct dwc3 *d) { return d ? d->last_trb_dma : 0; }
+uint32_t dwc3_last_trb_ctrl(const struct dwc3 *d) { return d ? d->last_trb_ctrl : 0; }
+uint32_t dwc3_last_trb_size(const struct dwc3 *d) { return d ? d->last_trb_size : 0; }
 int dwc3_init(void *context, size_t context_bytes,
                   const struct dwc3_platform *platform,
                   const struct dwc3_identity *identity,

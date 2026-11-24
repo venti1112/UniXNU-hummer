@@ -481,13 +481,15 @@ extern "C" int hummer_gpu_start() {
                 qcom_usb_debug_get_status(&usb);
             }
             if(usb.phase!=QCOM_USB_DEBUG_ACTIVE)
-                panic("HUMUSB ph=%u er=%u qr=%u dr=%u ds=%u db=%u dl=%u co=%d dm=%u pp=%u ps=%u pr=%x av=%u ad=%u tr=%u ta=%x tb=%x tn=%u ev=%u pc=%u hw=%x np=%u r0=%u",
+                panic("HUMUSB ph=%u er=%u qr=%u dr=%u ds=%u db=%u dl=%u co=%d dm=%u pp=%u ps=%u pr=%x av=%u ad=%u tr=%u ta=%x tb=%x tn=%u ev=%u pc=%u hw=%x np=%u r0=%u dc=%x st=%x t=%llx tc=%x ts=%x rn=%u",
                     usb.phase,usb.error,usb.qcom_result,usb.domain_result,usb.domain_stage,
                     usb.domain_bank,usb.domain_slot,usb.core_result,usb.dma_mode,
                     usb.prepare_result,usb.prepare_stage,(unsigned)usb.prepare_readback,
                     usb.dma_lease_active,usb.dma_address_width,usb.last_trace,
                     usb.trace_a,usb.trace_b,usb.traces,usb.last_poll_events,
-                    usb.poll_calls,usb.hwparams0,usb.nump,usb.ep0_resource);
+                    usb.poll_calls,usb.hwparams0,usb.nump,usb.ep0_resource,
+                    usb.dcfg,usb.dsts,(unsigned long long)usb.trb_dma,usb.trb_ctrl,
+                    usb.trb_size,usb.ep0_resource_now);
         }
     }
     g.attempted=true;
